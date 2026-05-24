@@ -1,0 +1,26 @@
+# FRR daemons enabled for the AIDC lab.
+# Shared by all switches — bind-mounted to /etc/frr/daemons by containerlab.
+zebra=yes
+bgpd=yes
+staticd=yes
+ospfd=no
+ospf6d=no
+ripd=no
+ripngd=no
+isisd=no
+pimd=no
+ldpd=no
+nhrpd=no
+eigrpd=no
+babeld=no
+sharpd=no
+pbrd=no
+bfdd=no
+fabricd=no
+vrrpd=no
+
+# Daemon options. Defaults are fine.
+vtysh_enable=yes
+zebra_options="  -A 127.0.0.1 -s 90000000"
+bgpd_options="   -A 127.0.0.1"
+staticd_options="-A 127.0.0.1"

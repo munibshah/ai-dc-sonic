@@ -1,0 +1,147 @@
+# AI DC Lab — Containerlab topology
+#
+# 2 spine + 4 leaf SONiC switches + 8 "GPU" Linux workers
+# CLOS pattern: every leaf has 1 link to each spine (full bipartite)
+# Each leaf has 2 workers attached.
+#
+# Linux iface naming (containerlab side):
+#   spineN: eth1..eth4 -> leaf1..leaf4
+#   leafN : eth1=spine1, eth2=spine2, eth3=gpuA, eth4=gpuB
+#   gpuN  : eth1 -> its leaf
+#
+# Routing/IP setup:
+#   - Each switch bind-mounts its FRR config from configs/frr/<node>/frr.conf
+#     and the shared daemons file from configs/frr/daemons.
+#   - After containers are up, run `make fabric-bootstrap` to bring up the
+#     fabric veths and (re)start zebra+bgpd inside every switch.
+#   - We are deliberately bypassing SONiC's port_config.ini / syncd port layer
+#     because netreplica/docker-sonic-vs:latest doesn't reliably bridge the
+#     containerlab veths (eth1..eth4) to its synthetic Ethernet0/4/8/12 ports.
+#     See notes/decisions.md ADR-008 for the full reasoning.
+#
+# Underlay addressing: see notes/decisions.md
+#
+# Cold start ~2-5 min on M-series Mac under Rosetta. `make warm` runs bootstrap
+# and waits for BGP.
+
+name: aidc
+prefix: ""
+
+mgmt:
+  network: aidc-mgmt
+  ipv4-subnet: 172.20.20.0/24
+
+topology:
+  kinds:
+    sonic-vs:
+      image: netreplica/docker-sonic-vs:latest
+      binds:
+        - ../configs/frr/daemons:/etc/frr/daemons:ro
+        - ../configs/frr/vtysh.conf:/etc/frr/vtysh.conf:ro
+        - ../configs/frr/bootstrap-switch.sh:/usr/local/bin/bootstrap-switch.sh:ro
+    linux:
+      image: aidc/worker:latest
+
+  nodes:
+    # ---- spines ----
+    spine1:
+      kind: sonic-vs
+      group: spine
+      mgmt-ipv4: 172.20.20.11
+      binds:
+        - ../configs/frr/spine1/frr.conf:/etc/frr/frr.conf
+    spine2:
+      kind: sonic-vs
+      group: spine
+      mgmt-ipv4: 172.20.20.12
+      binds:
+        - ../configs/frr/spine2/frr.conf:/etc/frr/frr.conf
+
+    # ---- leaves ----
+    leaf1:
+      kind: sonic-vs
+      group: leaf
+      mgmt-ipv4: 172.20.20.21
+      binds:
+        - ../configs/frr/leaf1/frr.conf:/etc/frr/frr.conf
+    leaf2:
+      kind: sonic-vs
+      group: leaf
+      mgmt-ipv4: 172.20.20.22
+      binds:
+        - ../configs/frr/leaf2/frr.conf:/etc/frr/frr.conf
+    leaf3:
+      kind: sonic-vs
+      group: leaf
+      mgmt-ipv4: 172.20.20.23
+      binds:
+        - ../configs/frr/leaf3/frr.conf:/etc/frr/frr.conf
+    leaf4:
+      kind: sonic-vs
+      group: leaf
+      mgmt-ipv4: 172.20.20.24
+      binds:
+        - ../configs/frr/leaf4/frr.conf:/etc/frr/frr.conf
+
+    # ---- gpu workers (arm64 native, real CPU collective ops) ----
+    gpu1:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "1", LEAF_ID: "1"}
+      mgmt-ipv4: 172.20.20.101
+    gpu2:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "2", LEAF_ID: "1"}
+      mgmt-ipv4: 172.20.20.102
+    gpu3:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "3", LEAF_ID: "2"}
+      mgmt-ipv4: 172.20.20.103
+    gpu4:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "4", LEAF_ID: "2"}
+      mgmt-ipv4: 172.20.20.104
+    gpu5:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "5", LEAF_ID: "3"}
+      mgmt-ipv4: 172.20.20.105
+    gpu6:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "6", LEAF_ID: "3"}
+      mgmt-ipv4: 172.20.20.106
+    gpu7:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "7", LEAF_ID: "4"}
+      mgmt-ipv4: 172.20.20.107
+    gpu8:
+      kind: linux
+      group: worker
+      env: {WORKER_ID: "8", LEAF_ID: "4"}
+      mgmt-ipv4: 172.20.20.108
+
+  links:
+    # -------- spine <-> leaf (8 links) --------
+    - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    - endpoints: ["spine1:eth3", "leaf3:eth1"]
+    - endpoints: ["spine1:eth4", "leaf4:eth1"]
+    - endpoints: ["spine2:eth1", "leaf1:eth2"]
+    - endpoints: ["spine2:eth2", "leaf2:eth2"]
+    - endpoints: ["spine2:eth3", "leaf3:eth2"]
+    - endpoints: ["spine2:eth4", "leaf4:eth2"]
+
+    # -------- leaf <-> worker (8 links) --------
+    - endpoints: ["leaf1:eth3", "gpu1:eth1"]
+    - endpoints: ["leaf1:eth4", "gpu2:eth1"]
+    - endpoints: ["leaf2:eth3", "gpu3:eth1"]
+    - endpoints: ["leaf2:eth4", "gpu4:eth1"]
+    - endpoints: ["leaf3:eth3", "gpu5:eth1"]
+    - endpoints: ["leaf3:eth4", "gpu6:eth1"]
+    - endpoints: ["leaf4:eth3", "gpu7:eth1"]
+    - endpoints: ["leaf4:eth4", "gpu8:eth1"]

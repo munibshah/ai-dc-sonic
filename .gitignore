@@ -1,0 +1,30 @@
+# Containerlab generated artifacts
+clab-aidc/
+*.bak
+*.log
+
+# Worker image build artifacts
+workers/.cache/
+
+# Telemetry data
+telemetry/prometheus/data/
+telemetry/grafana/data/
+
+# PCAPs
+*.pcap
+*.pcapng
+captures/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+ui/out/
+
+# OS
+.DS_Store
