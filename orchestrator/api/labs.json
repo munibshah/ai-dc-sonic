@@ -1,0 +1,40 @@
+[
+  {
+    "id": "1",
+    "title": "Build the BGP Underlay",
+    "summary": "Configure a 2-spine / 4-leaf CLOS fabric from scratch via the in-browser console. Learn shared-AS spines, per-leaf ASNs, ECMP with multipath-relax, peer-groups, fast BGP timers — and why each choice matters for AI workloads.",
+    "status": "active",
+    "duration_min": 45,
+    "exercise_path": "docs/lab-guide/01-exercise.md",
+    "solution_path": "docs/lab-guide/02-solution.md",
+    "overview_path": "docs/lab-guide/00-overview.md",
+    "learning_objectives": [
+      "eBGP CLOS underlay design",
+      "Shared-AS spines vs per-leaf ASNs",
+      "ECMP with bestpath as-path multipath-relax",
+      "Peer-groups for operational scale",
+      "Fast BGP timers (3s/9s) for training-job continuity"
+    ]
+  },
+  {
+    "id": "2",
+    "title": "Inject a Link Failure",
+    "summary": "Take down a fabric link, watch BGP reconverge under fast timers, observe ECMP shrink from 2 to 1 path, and trace how training-job traffic stays alive across the failure.",
+    "status": "coming-soon",
+    "duration_min": 20
+  },
+  {
+    "id": "3",
+    "title": "AllReduce Traffic Patterns",
+    "summary": "Run a Gloo-backed AllReduce across all 8 workers. Visualize how the synchronous east-west burst loads the fabric, and see what happens when you increase tensor size.",
+    "status": "coming-soon",
+    "duration_min": 30
+  },
+  {
+    "id": "4",
+    "title": "NCCL Collective Emulation",
+    "summary": "Simulate NCCL communication patterns (AllReduce, Broadcast, AllGather, ReduceScatter) and see how each one stresses the fabric differently. Pick a pattern, pick a topology shape, watch the flows.",
+    "status": "coming-soon",
+    "duration_min": 45
+  }
+]

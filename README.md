@@ -2,7 +2,7 @@
 
 A virtual AI Data Center fabric you control from your laptop. Built to learn — and demonstrate — hyperscale networking (CLOS, EVPN-VXLAN, congestion control, telemetry) under realistic AI training traffic.
 
-> **Quick references:** [Lab topology](docs/topology.md) · [Switch CLI cheat sheet](docs/switch-cli-reference.md) · [Phase 1 demo](scenarios/00-bring-up-fabric.md) · [**Lab guide — build the underlay yourself**](docs/lab-guide/00-overview.md)
+> **Quick references:** [Lab topology](docs/topology.md) · [Switch CLI cheat sheet](docs/switch-cli-reference.md) · [Phase 1 demo](scenarios/00-bring-up-fabric.md) · [**Lab guide — build the underlay yourself**](docs/lab-guide/00-overview.md) · **In-browser labs:** open `http://<remote>:3000` and click **Lab 1**.
 
 ```
               spine1            spine2          AS 65000 (shared)
@@ -127,16 +127,18 @@ Successful `make warm` ends with all 56 worker-pair pings passing and BGP up on 
 ```bash
 make ui-deps          # one-time: install FastAPI venv + Next.js node_modules on the remote
 make ui               # start backend + frontend on the remote
-open http://<remote-host>:3000   # device list, topology view, in-browser consoles
+open http://<remote-host>:3000   # labs index → click Lab 1 to enter the workbench
 make ui-smoke         # headless WebSocket smoke test (no browser needed)
 make ui-stop          # stop both
 ```
 
-Both backend (`orchestrator/api/main.py`) and frontend (`ui/`, Next.js + xterm.js) run **on the remote**. The backend uses a real PTY (`docker exec -it`) and proxies stdio over a WebSocket. The frontend has three pages:
+Both backend (`orchestrator/api/main.py`) and frontend (`ui/`, Next.js + xterm.js + react-markdown) run **on the remote**. The backend uses a real PTY (`docker exec -it`) and proxies stdio over a WebSocket. The frontend pages:
 
-- **/** — grid of all 14 devices with status pills; click any one to open a console.
-- **/topology** — SVG diagram of the fabric. Hover a device to highlight its links and surface every adjacent /31's IPs. Hover a link directly to see its endpoints.
-- **/console/&lt;name&gt;** — full `xterm.js` terminal attached to that container's bash.
+- **/** — **Labs index.** Cards for each lab (Lab 1 active; Labs 2–4 are placeholders for future content).
+- **/labs/&lt;id&gt;** — **Lab workbench.** Free-scroll markdown guide on the left + tabbed terminal pane on the right + a "Topology" button that pops a clickable fabric diagram for picking which device to console into. Multiple terminals stay open across tab switches.
+- **/topology** — Standalone topology view (hover a device to see its links' IPs; click for a single console).
+- **/console/&lt;name&gt;** — Standalone single-device terminal.
+- **/devices** — Flat device grid (the original home page).
 
 ---
 

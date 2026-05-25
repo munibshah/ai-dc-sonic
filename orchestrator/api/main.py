@@ -8,6 +8,9 @@ OrbStack's automatic DNS.
 Endpoints:
   GET  /api/health                       liveness
   GET  /api/devices                      list lab containers (by group)
+  GET  /api/labs                         list available labs (active + coming-soon)
+  GET  /api/labs/{id}                    single lab metadata
+  GET  /api/labs/{id}/content/{part}     markdown body (part: exercise|solution|overview)
   WS   /ws/console/{name}                PTY-backed shell into the container
 """
 
@@ -23,10 +26,12 @@ import signal
 import struct
 import subprocess
 import termios
+from pathlib import Path
 from typing import Dict, List, Literal, Optional, Set
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 # ---- topology truth ---------------------------------------------------------
@@ -113,6 +118,60 @@ def list_devices():
                 )
             )
     return devices
+
+
+# ---- labs registry ----------------------------------------------------------
+# Lab content lives under <repo>/docs/lab-guide/*.md and is referenced from the
+# registry by paths relative to the repo root. Repo root is two parents up from
+# this file (orchestrator/api/main.py -> orchestrator/api -> orchestrator -> repo).
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+LABS_REGISTRY_PATH = Path(__file__).resolve().parent / "labs.json"
+LAB_CONTENT_PARTS = {"exercise", "solution", "overview"}
+
+
+def _load_labs_registry() -> List[dict]:
+    if not LABS_REGISTRY_PATH.exists():
+        return []
+    with LABS_REGISTRY_PATH.open() as f:
+        return json.load(f)
+
+
+def _public_lab(entry: dict) -> dict:
+    """Strip server-side path fields before returning over the API."""
+    return {k: v for k, v in entry.items() if not k.endswith("_path")}
+
+
+@app.get("/api/labs")
+def list_labs():
+    return [_public_lab(e) for e in _load_labs_registry()]
+
+
+@app.get("/api/labs/{lab_id}")
+def get_lab(lab_id: str):
+    for entry in _load_labs_registry():
+        if entry.get("id") == lab_id:
+            return _public_lab(entry)
+    raise HTTPException(status_code=404, detail=f"lab {lab_id!r} not found")
+
+
+@app.get("/api/labs/{lab_id}/content/{part}", response_class=PlainTextResponse)
+def get_lab_content(lab_id: str, part: str):
+    if part not in LAB_CONTENT_PARTS:
+        raise HTTPException(status_code=404, detail=f"unknown lab part {part!r}")
+    for entry in _load_labs_registry():
+        if entry.get("id") != lab_id:
+            continue
+        rel = entry.get(f"{part}_path")
+        if not rel:
+            raise HTTPException(status_code=404, detail=f"lab {lab_id} has no {part}")
+        path = (REPO_ROOT / rel).resolve()
+        # Don't follow paths outside the repo (defense against a malformed registry).
+        if REPO_ROOT not in path.parents and path != REPO_ROOT:
+            raise HTTPException(status_code=500, detail="lab content path escapes repo")
+        if not path.exists():
+            raise HTTPException(status_code=404, detail=f"lab content file missing: {rel}")
+        return path.read_text()
+    raise HTTPException(status_code=404, detail=f"lab {lab_id!r} not found")
 
 
 # ---- console WebSocket ------------------------------------------------------

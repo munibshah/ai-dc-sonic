@@ -38,3 +38,26 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!r.ok) throw new Error(`devices fetch failed: ${r.status}`);
   return r.json();
 }
+
+export type LabStatus = "active" | "coming-soon";
+
+export interface Lab {
+  id: string;
+  title: string;
+  summary: string;
+  status: LabStatus;
+  duration_min?: number;
+  learning_objectives?: string[];
+}
+
+export async function fetchLabs(): Promise<Lab[]> {
+  const r = await fetch(`${API_BASE}/api/labs`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`labs fetch failed: ${r.status}`);
+  return r.json();
+}
+
+export async function fetchLab(id: string): Promise<Lab> {
+  const r = await fetch(`${API_BASE}/api/labs/${id}`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`lab ${id} fetch failed: ${r.status}`);
+  return r.json();
+}

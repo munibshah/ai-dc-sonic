@@ -21,9 +21,11 @@ export default function RootLayout({
               AIDC Lab
             </Link>
             <nav className="text-sm text-white/70 flex gap-4">
-              <Link href="/" className="hover:text-white">Devices</Link>
+              <Link href="/" className="hover:text-white">Labs</Link>
               <span className="text-white/30">|</span>
               <Link href="/topology" className="hover:text-white">Topology</Link>
+              <span className="text-white/30">|</span>
+              <Link href="/devices" className="hover:text-white">Devices</Link>
             </nav>
           </div>
         </header>
