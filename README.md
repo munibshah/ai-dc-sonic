@@ -92,9 +92,17 @@ sudo usermod -aG docker $USER
 # (c) Containerlab (uses curl + sudo; will add you to the clab_admins group):
 bash -c "$(curl -sL https://get.containerlab.dev)"
 
-# (d) Python + Node toolchain for the UI (Phase 2):
-sudo apt-get install -y python3-venv python3-pip nodejs npm
+# (d) Python for the orchestrator (FastAPI backend):
+sudo apt-get install -y python3-venv python3-pip
+
+# (e) Node.js + pnpm for the UI. NOT 'apt install nodejs' — Ubuntu 22.04's
+#     apt nodejs is v12 and pnpm@9 requires Node >=18.12. NodeSource has
+#     current LTS packaged:
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
 sudo npm install -g pnpm@9
+# (Pin pnpm@9; pnpm 10/11 hard-fail on the sharp ignored-build-script issue
+#  during `pnpm install` for the Next.js UI.)
 
 # Log out and back in (or `newgrp docker && newgrp clab_admins`) so the
 # group changes take effect, then check:
