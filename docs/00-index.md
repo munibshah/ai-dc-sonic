@@ -4,6 +4,7 @@ A reading order for someone coming from a networking background into AI infrastr
 
 ## Reference docs
 
+- [**Lab guide — build the underlay yourself**](lab-guide/00-overview.md) — hands-on exercise: wipe the switch configs and configure them from scratch (full solution included)
 - [Lab topology](topology.md) — diagram, per-device factsheets, full link inventory, BGP peer matrix
 - [Spine & Leaf CLI reference](switch-cli-reference.md) — verify config, make persistent changes, common failure modes
 

@@ -54,6 +54,11 @@ help:
 	@echo "  make ui-logs          tail both logs"
 	@echo "  make ui-smoke         CLI WebSocket end-to-end test"
 	@echo "  open http://$(REMOTE_IP):3000  (Mac browser)"
+	@echo ""
+	@echo "  ---- Lab guide (docs/lab-guide/) ----"
+	@echo "  make wipe             blank the switch FRR configs (enter exercise mode)"
+	@echo "  make solve            restore working configs via 'git checkout' (exit exercise mode)"
+	@echo "  make lab-status       quick \"am I done?\" summary"
 
 # ---- sync ------------------------------------------------------------------
 # Sync the local repo to the remote. Excludes generated artifacts.
@@ -209,3 +214,53 @@ ui-logs:
 .PHONY: ui-smoke
 ui-smoke:
 	$(SSH) "cd $(REMOTE_REPO)/orchestrator && .venv/bin/python tests/ws_smoke.py leaf1 \"vtysh -c 'show ip bgp summary' | head -8\""
+
+# ============================================================================
+# Lab guide (docs/lab-guide/) — exercise / solve / status
+#
+# `wipe`   blanks the 6 switch frr.conf files (copies from configs/frr/_skeleton/)
+#          and re-applies, so the lab transitions to "no BGP anywhere" state.
+# `solve`  reverts those files via `git checkout` and re-applies, returning to
+#          the working state. Requires this to be a git checkout.
+# ============================================================================
+
+SWITCHES_FRR := spine1 spine2 leaf1 leaf2 leaf3 leaf4
+
+.PHONY: wipe
+wipe:
+	@echo "Wiping switch FRR configs to skeleton (exercise mode)..."
+	@for sw in $(SWITCHES_FRR); do \
+	  cp configs/frr/_skeleton/$$sw/frr.conf configs/frr/$$sw/frr.conf; \
+	  echo "  blanked configs/frr/$$sw/frr.conf"; \
+	done
+	$(MAKE) sync
+	$(MAKE) fabric-bootstrap
+	@echo ""
+	@echo "Lab is now in EXERCISE mode."
+	@echo "  - All BGP peers will go Active/down within ~10s."
+	@echo "  - Read   docs/lab-guide/01-exercise.md  for the task."
+	@echo "  - Hint   docs/lab-guide/02-solution.md  has the answer key."
+	@echo "  - Reset  make solve"
+
+.PHONY: solve
+solve:
+	@echo "Restoring switch FRR configs from git (working state)..."
+	@for sw in $(SWITCHES_FRR); do \
+	  git checkout configs/frr/$$sw/frr.conf 2>/dev/null \
+	    && echo "  restored configs/frr/$$sw/frr.conf" \
+	    || echo "  WARN: git checkout failed for $$sw — are you in a git checkout?"; \
+	done
+	$(MAKE) sync
+	$(MAKE) fabric-bootstrap
+	@echo ""
+	@echo "Lab restored to WORKING state. Use 'make lab-status' to confirm."
+
+# Concise "am I done?" — counts Established peers and OK pings.
+.PHONY: lab-status
+lab-status:
+	@echo "== BGP =="
+	@$(MAKE) bgp-check 2>&1 | grep -E "^Total number of neighbors|^Neighbor|^(10|spine|leaf)" | head -40 || true
+	@echo ""
+	@echo "== Ping mesh =="
+	@$(MAKE) ping-mesh 2>&1 | grep -c "OK"  | xargs -I{} echo "  {} / 56 pings OK"
+	@$(MAKE) ping-mesh 2>&1 | grep -c "FAIL" | xargs -I{} echo "  {} / 56 pings FAIL"

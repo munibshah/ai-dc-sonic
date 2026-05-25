@@ -2,7 +2,7 @@
 
 A virtual AI Data Center fabric you control from your laptop. Built to learn — and demonstrate — hyperscale networking (CLOS, EVPN-VXLAN, congestion control, telemetry) under realistic AI training traffic.
 
-> **Quick references:** [Lab topology](docs/topology.md) · [Switch CLI cheat sheet](docs/switch-cli-reference.md) · [Phase 1 demo](scenarios/00-bring-up-fabric.md)
+> **Quick references:** [Lab topology](docs/topology.md) · [Switch CLI cheat sheet](docs/switch-cli-reference.md) · [Phase 1 demo](scenarios/00-bring-up-fabric.md) · [**Lab guide — build the underlay yourself**](docs/lab-guide/00-overview.md)
 
 ```
               spine1            spine2          AS 65000 (shared)
@@ -163,6 +163,20 @@ notes/         ADR-lite decision records
 - **VXLAN encap is software.** Throughput is hundreds of Mbps, not 100 Gbps. Bandwidth is a relative signal here, not an absolute one.
 - **No real GPUs.** PyTorch runs on CPU via the Gloo backend. The collective ops are *real* (real AllReduce ring algorithm, real bytes on the wire); the matmuls are slow. We are studying the network, not the math.
 - **SONiC's config_db path isn't fully wired.** The `netreplica/docker-sonic-vs` image we use (the only readily available SONiC VS image) is from 2021 and doesn't load the modern `BGP_GLOBALS` table layout. We bypass it and configure FRR directly via bind-mounted `frr.conf` files. The config_db.json files are kept as a reference for what the same fabric would look like under a modern SONiC build. See [ADR-008](notes/decisions.md).
+
+## Learn by doing
+
+The repo ships with a **hands-on lab guide** that wipes the switch configs and asks you to build the BGP underlay from scratch. Step-by-step solution included for when you get stuck.
+
+```bash
+make wipe         # blank the switch FRR configs (enter exercise mode)
+$EDITOR configs/frr/leaf1/frr.conf   # …and the other 5 switches
+make sync && make fabric-bootstrap   # apply your edits
+make lab-status   # check progress (BGP established? all 56 pings OK?)
+make solve        # restore working configs from git when done (or to skip ahead)
+```
+
+See [`docs/lab-guide/00-overview.md`](docs/lab-guide/00-overview.md) to start.
 
 ## Phase roadmap
 
