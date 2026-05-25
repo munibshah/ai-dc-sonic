@@ -96,12 +96,12 @@ export default function LabWorkbenchPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 flex-1 min-h-0">
-        <section className="rounded-lg border border-white/10 bg-black/30 overflow-y-auto min-h-0">
+      <div className="flex flex-col lg:flex-row gap-3 flex-1 min-h-0">
+        <section className="flex-1 min-h-0 lg:basis-0 rounded-lg border border-white/10 bg-black/30 overflow-y-auto">
           <GuidePane labId={lab.id} part="exercise" />
         </section>
 
-        <section className="rounded-lg border border-white/10 bg-black overflow-hidden min-h-0 flex flex-col">
+        <section className="flex-1 min-h-0 lg:basis-0 rounded-lg border border-white/10 bg-black overflow-hidden flex flex-col">
           <TabbedTerminals
             ref={terminalsRef}
             onRequestPickDevice={() => devices && setTopoOpen(true)}

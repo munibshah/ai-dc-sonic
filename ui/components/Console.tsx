@@ -49,7 +49,11 @@ export default function Console({ name, className, onStatusChange, active = true
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(termRef.current);
-      fit.fit();
+      // Wait one paint so the parent layout (esp. inside flex containers)
+      // has a measurable size before FitAddon computes rows/cols. Without
+      // this the first fit can yield 0/0, which freezes the PTY at 0×0.
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      safeFit(fit);
       xtermRef.current = term;
       fitRef.current = fit;
 
@@ -59,7 +63,12 @@ export default function Console({ name, className, onStatusChange, active = true
 
       ws.onopen = () => {
         setStatus("open");
-        const { rows, cols } = term;
+        // Refit once more in case the layout settled between mount and WS open,
+        // then send the sized resize. Fallback to a sane default if fit produced
+        // a degenerate value.
+        safeFit(fit);
+        const rows = term.rows > 1 ? term.rows : 24;
+        const cols = term.cols > 1 ? term.cols : 80;
         ws.send(JSON.stringify({ type: "resize", rows, cols }));
       };
       ws.onmessage = (ev) => {
@@ -120,4 +129,10 @@ export default function Console({ name, className, onStatusChange, active = true
   }, [active]);
 
   return <div ref={termRef} className={className ?? "term-host h-[75vh]"} />;
+}
+
+function safeFit(fit: import("@xterm/addon-fit").FitAddon | null) {
+  try {
+    fit?.fit();
+  } catch {}
 }

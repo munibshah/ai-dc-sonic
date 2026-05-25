@@ -1,7 +1,7 @@
 "use client";
 
 import { useImperativeHandle, forwardRef, useState } from "react";
-import Console from "@/components/Console";
+import Console, { ConsoleStatus } from "@/components/Console";
 
 export interface TabbedTerminalsHandle {
   openTerminal: (name: string) => void;
@@ -19,6 +19,8 @@ const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function Tabbed
 ) {
   const [tabs, setTabs] = useState<string[]>([]);
   const [active, setActive] = useState<string | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, ConsoleStatus>>({});
+  const [errors, setErrors] = useState<Record<string, string | null>>({});
 
   useImperativeHandle(ref, () => ({
     openTerminal(name: string) {
@@ -48,6 +50,13 @@ const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function Tabbed
       <div className="flex items-stretch border-b border-white/10 bg-black/40 overflow-x-auto">
         {tabs.map((name) => {
           const isActive = name === active;
+          const st = statuses[name] ?? "connecting";
+          const dot =
+            st === "open"
+              ? "bg-emerald-400"
+              : st === "connecting"
+              ? "bg-amber-400 animate-pulse"
+              : "bg-rose-400";
           return (
             <button
               key={name}
@@ -57,12 +66,13 @@ const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function Tabbed
                   ? "bg-black text-white"
                   : "bg-black/20 text-white/60 hover:text-white hover:bg-black/40"
               }`}
+              title={
+                errors[name]
+                  ? `${st}: ${errors[name]}`
+                  : st
+              }
             >
-              <span
-                className={`inline-block w-1.5 h-1.5 rounded-full ${
-                  isActive ? "bg-emerald-400" : "bg-white/30"
-                }`}
-              />
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${dot}`} />
               {name}
               <span
                 role="button"
@@ -103,6 +113,10 @@ const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function Tabbed
               name={name}
               active={name === active}
               className="term-host w-full h-full"
+              onStatusChange={(s, e) => {
+                setStatuses((cur) => (cur[name] === s ? cur : { ...cur, [name]: s }));
+                setErrors((cur) => (cur[name] === e ? cur : { ...cur, [name]: e }));
+              }}
             />
           </div>
         ))}

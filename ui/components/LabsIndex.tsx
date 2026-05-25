@@ -43,15 +43,6 @@ export default function LabsIndex() {
           <LabCard key={lab.id} lab={lab} />
         ))}
       </div>
-
-      <footer className="mt-8 text-xs text-white/40 flex gap-4">
-        <Link href="/topology" className="hover:text-white/70">
-          → Free-form topology browser
-        </Link>
-        <Link href="/devices" className="hover:text-white/70">
-          → Device grid
-        </Link>
-      </footer>
     </div>
   );
 }

@@ -3,8 +3,6 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { API_BASE } from "@/lib/api";
 
 interface Props {
@@ -72,7 +70,7 @@ export default function GuidePane({ labId, part = "exercise" }: Props) {
               href={href}
               target="_blank"
               rel="noreferrer"
-              className="text-amber-300 hover:text-amber-200 underline decoration-amber-500/40"
+              className="text-sky-300 hover:text-sky-200 underline decoration-sky-500/40"
             >
               {children}
             </a>
@@ -95,20 +93,21 @@ export default function GuidePane({ labId, part = "exercise" }: Props) {
             <td className="border border-white/10 px-3 py-1.5 align-top">{children}</td>
           ),
           hr: () => <hr className="my-6 border-white/10" />,
-          code: ({ inline, className, children, ...props }: any) => {
-            const match = /language-(\w+)/.exec(className || "");
-            const codeText = String(children).replace(/\n$/, "");
-            if (inline) {
-              return (
-                <code className="px-1.5 py-0.5 rounded bg-white/10 text-amber-200 font-mono text-[0.9em]">
-                  {children}
-                </code>
-              );
-            }
-            return (
-              <CodeBlock language={match?.[1] ?? "text"} value={codeText} />
-            );
+          // react-markdown v10 dropped the `inline` prop. The reliable
+          // discriminator is structural: fenced code blocks come through
+          // as <pre><code>, inline backticks come through as bare <code>.
+          // We intercept <pre> to render our CodeBlock; the <code> override
+          // then only fires for inline cases.
+          pre: ({ node }: any) => {
+            const codeNode = node?.children?.find((c: any) => c.tagName === "code") ?? node?.children?.[0];
+            const value = extractCodeText(codeNode).replace(/\n$/, "");
+            return <CodeBlock value={value} />;
           },
+          code: ({ children }: any) => (
+            <code className="px-1 py-0.5 rounded bg-slate-700/40 text-sky-200/90 font-mono text-[0.88em]">
+              {children}
+            </code>
+          ),
         }}
       >
         {md}
@@ -117,7 +116,14 @@ export default function GuidePane({ labId, part = "exercise" }: Props) {
   );
 }
 
-function CodeBlock({ language, value }: { language: string; value: string }) {
+function extractCodeText(node: any): string {
+  if (!node) return "";
+  if (typeof node.value === "string") return node.value;
+  if (Array.isArray(node.children)) return node.children.map(extractCodeText).join("");
+  return "";
+}
+
+function CodeBlock({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -136,20 +142,11 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
       >
         {copied ? "copied" : "copy"}
       </button>
-      <SyntaxHighlighter
-        language={language}
-        style={oneDark}
-        customStyle={{
-          margin: 0,
-          padding: "0.9rem 1rem",
-          fontSize: "0.85rem",
-          borderRadius: "0.5rem",
-          background: "#0b0f1a",
-        }}
-        wrapLongLines={false}
-      >
-        {value}
-      </SyntaxHighlighter>
+      <pre className="m-0 px-4 py-3 rounded-lg bg-[#0b0f1a] border border-white/10 overflow-x-auto">
+        <code className="font-mono text-[0.85em] leading-relaxed text-slate-100 whitespace-pre">
+          {value}
+        </code>
+      </pre>
     </div>
   );
 }
