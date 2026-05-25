@@ -42,17 +42,26 @@ Why a remote host? See [notes/decisions.md ADR-010](notes/decisions.md). TL;DR: 
 
 ---
 
+## Two ways to run
+
+The lab supports two topologies:
+
+- **Remote box (default)** — you edit on a Mac/laptop, the lab containers + UI run on a separate Linux box, the laptop drives `make` over SSH. Best when you want your laptop to stay quiet and the lab to live on a dedicated machine.
+- **Local (`LOCAL=1`)** — clone directly onto the Linux box that will run the lab and prepend `LOCAL=1` to every `make` command. No SSH, no rsync — every target runs directly on this box. Best when you don't have a separate dev laptop, or when you're running on a cloud VM and just SSH'ing in to use it.
+
+Pick whichever fits your setup; everything below works the same way once you decide.
+
 ## Requirements
 
-**On your laptop** (Mac or Linux):
+**On your laptop** (Mac or Linux) — only when using remote mode:
 - `ssh`, `rsync`, `make`, `curl`
 - A modern browser
 
-**On the remote host** (the box that runs the lab):
+**On the host that runs the lab** (the remote box, or your local box in `LOCAL=1`):
 - Ubuntu 20.04+ (Debian-based; should also work on RHEL with minor tweaks)
 - Docker (CE) installed and the lab user in the `docker` group
 - ~16 GB RAM and ~10 GB free disk
-- Reachable from your laptop on TCP 22 (SSH), 3000 (Next.js), 8000 (FastAPI)
+- Network access for the UI ports (3000, 8000) — only needed if you want to browse to the lab from another machine
 
 The lab user does **not** need root sudo for day-to-day operation — just membership in `docker` and `clab_admins`. The one-time installer below is the only step that uses sudo.
 
@@ -60,26 +69,10 @@ The lab user does **not** need root sudo for day-to-day operation — just membe
 
 ## One-time setup
 
-### 1. SSH key to the remote (so `make` doesn't prompt for a password)
+### 1. Install Docker + containerlab on the lab host
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''   # if you don't already have one
-ssh-copy-id <user>@<remote-host>                   # uploads your pubkey
-```
-
-Then add an SSH alias to `~/.ssh/config` so the Makefile can find your host:
-
-```ssh-config
-Host aidc-remote
-    HostName 192.168.1.26       # ← your remote's IP or DNS name
-    User eveng                  # ← your remote user
-    IdentityFile ~/.ssh/id_ed25519
-```
-
-### 2. Install Docker + containerlab on the remote
-
-```bash
-# On the remote, once:
+# On the box that will run the lab (remote or local), once:
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER
 bash -c "$(curl -sL https://get.containerlab.dev)"   # adds you to clab_admins
@@ -88,17 +81,41 @@ sudo npm install -g pnpm@9                            # for the UI (Phase 2)
 # Log out and back in so the group changes take effect.
 ```
 
-### 3. Clone this repo on your laptop
+### 2. Clone the repo
 
+For **remote mode**, clone on your laptop:
 ```bash
 git clone https://github.com/munibshah/ai-dc-sonic.git
 cd ai-dc-sonic
 ```
 
-### 4. (Optional) override the remote in the Makefile
+For **`LOCAL=1` mode**, clone on the lab host itself:
+```bash
+ssh <user>@<lab-host>
+git clone https://github.com/munibshah/ai-dc-sonic.git
+cd ai-dc-sonic
+```
 
-If your SSH alias is **not** `aidc-remote` or your remote IP isn't `192.168.1.26`, pass them as env vars to every `make` command, or edit `Makefile`:
+### 3. (Remote mode only) SSH key + alias
 
+Skip this for `LOCAL=1`.
+
+```bash
+# On your laptop:
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''   # if you don't already have one
+ssh-copy-id <user>@<remote-host>                   # upload your pubkey
+```
+
+Then add an alias to `~/.ssh/config` so the Makefile can reach the host:
+
+```ssh-config
+Host aidc-remote
+    HostName 192.168.1.26       # ← your remote's IP or DNS name
+    User eveng                  # ← your remote user
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+If your alias isn't `aidc-remote` or your IP isn't `192.168.1.26`, override per-invocation:
 ```bash
 make REMOTE_HOST=mybox REMOTE_IP=10.0.0.5 warm
 ```
@@ -107,7 +124,7 @@ make REMOTE_HOST=mybox REMOTE_IP=10.0.0.5 warm
 
 ## Getting started
 
-From the cloned repo on your laptop:
+### Remote mode (laptop → remote box)
 
 ```bash
 make sync             # rsync the repo to the remote (do this whenever you edit a file)
@@ -120,7 +137,21 @@ make ping-mesh        # gpu1..gpu8 ping each other across the fabric
 make down             # tear it all down
 ```
 
-Successful `make warm` ends with all 56 worker-pair pings passing and BGP up on every switch.
+### Local mode (single box)
+
+Prepend `LOCAL=1` to every `make` command — no SSH, no rsync:
+
+```bash
+make LOCAL=1 pull
+make LOCAL=1 warm
+make LOCAL=1 shell-leaf1
+make LOCAL=1 ui                  # backend on :8000, frontend on :3000
+make LOCAL=1 down
+```
+
+If you want to access the UI from another machine on the LAN, the Next.js dev server is already bound to `0.0.0.0` — just browse to `http://<this-box-ip>:3000`. The frontend auto-resolves the API base from the page's hostname in LOCAL mode, so no other env vars are needed.
+
+Successful `warm` ends with all 56 worker-pair pings passing and BGP up on every switch.
 
 ### Web UI (Phase 2)
 

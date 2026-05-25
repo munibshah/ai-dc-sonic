@@ -1,20 +1,35 @@
 # AI DC Lab — Makefile
 #
-# Targets execute on the REMOTE Ubuntu box (aidc-remote, 192.168.1.26) via SSH.
-# The repo lives at $(REMOTE_REPO) on the remote; we rsync the Mac copy over
-# whenever you `make sync`.  Native amd64, no Rosetta — much faster than the
-# earlier OrbStack/M-series path.  See README.md and notes/decisions.md
-# (ADR-010) for the move from OrbStack to remote.
+# Two run modes:
+#   1. Default (remote): targets execute on a REMOTE Ubuntu box via SSH. The
+#      repo lives at $(REMOTE_REPO) on the remote; `make sync` rsyncs the
+#      laptop copy over.  See notes/decisions.md (ADR-010) for the move
+#      from OrbStack to a remote box.
+#   2. `make LOCAL=1 <target>`: skip SSH and rsync entirely. Everything runs
+#      on this machine; the repo path is auto-detected via $(CURDIR). Use
+#      this when you've cloned the repo onto the same Linux box that will
+#      run the lab (no separate dev laptop / remote host split).
 
-# ---- remote target ---------------------------------------------------------
-REMOTE_HOST  ?= aidc-remote
-REMOTE_REPO  ?= /home/eveng/aidc-lab
-REMOTE_IP    ?= 192.168.1.26
-REMOTE_USER  ?= eveng
+LOCAL ?=
 
-# Wrap a command to run on the remote in $(REMOTE_REPO).
-SSH      := ssh $(REMOTE_HOST)
-RUN      := $(SSH) "cd $(REMOTE_REPO) &&"
+ifeq ($(LOCAL),1)
+  # All commands run locally on this box.
+  REMOTE_HOST ?= localhost
+  REMOTE_IP   ?= 127.0.0.1
+  REMOTE_REPO ?= $(CURDIR)
+  SSH         := bash -c
+  SSH_TTY     := bash -c
+  RUN         := cd $(REMOTE_REPO) &&
+else
+  # Default: SSH into a remote Linux box and run things there.
+  REMOTE_HOST ?= aidc-remote
+  REMOTE_REPO ?= /home/eveng/aidc-lab
+  REMOTE_IP   ?= 192.168.1.26
+  REMOTE_USER ?= eveng
+  SSH         := ssh $(REMOTE_HOST)
+  SSH_TTY     := ssh -t $(REMOTE_HOST)
+  RUN         := $(SSH) "cd $(REMOTE_REPO) &&"
+endif
 
 # ---- topology --------------------------------------------------------------
 TOPO     := topo/aidc.clab.yml
@@ -28,6 +43,8 @@ SPINES   := spine1 spine2
 .PHONY: help
 help:
 	@echo "AI DC Lab — runs on $(REMOTE_HOST) ($(REMOTE_IP))"
+	@echo "  Mode: $(if $(filter 1,$(LOCAL)),LOCAL (no SSH; repo: $(REMOTE_REPO)),REMOTE via SSH (repo: $(REMOTE_HOST):$(REMOTE_REPO)))"
+	@echo "  Tip:  prepend 'LOCAL=1' to run everything on this machine without SSH."
 	@echo ""
 	@echo "  ---- One-time setup ----"
 	@echo "  make sync             rsync local repo -> $(REMOTE_HOST):$(REMOTE_REPO)"
@@ -61,8 +78,13 @@ help:
 	@echo "  make lab-status       quick \"am I done?\" summary"
 
 # ---- sync ------------------------------------------------------------------
-# Sync the local repo to the remote. Excludes generated artifacts.
+# Sync the laptop repo to the remote. Excludes generated artifacts.
+# In LOCAL=1 mode this is a no-op (the repo is already on the target machine).
 .PHONY: sync
+ifeq ($(LOCAL),1)
+sync:
+	@echo "sync: LOCAL=1, nothing to do (repo already at $(REMOTE_REPO))"
+else
 sync:
 	@echo "rsync -> $(REMOTE_HOST):$(REMOTE_REPO)"
 	@$(SSH) "mkdir -p $(REMOTE_REPO)"
@@ -81,6 +103,7 @@ sync:
 	  --exclude='.DS_Store' \
 	  ./ $(REMOTE_HOST):$(REMOTE_REPO)/
 	@echo "synced."
+endif
 
 # ---- pull / build ----------------------------------------------------------
 .PHONY: pull
@@ -111,14 +134,20 @@ reload: down up
 ps:
 	$(RUN) containerlab inspect -t $(TOPO)
 
-# `make shell-leaf1` -> interactive shell in container `leaf1` on the remote
+# `make shell-leaf1` -> interactive shell in container `leaf1`.
 .PHONY: shell-%
 shell-%:
-	$(SSH) -t "docker exec -it $* bash || docker exec -it $* sh"
+	$(SSH_TTY) "docker exec -it $* bash || docker exec -it $* sh"
 
+# Interactive SSH into the remote box. No-op in LOCAL=1 (you're already on it).
 .PHONY: ssh
+ifeq ($(LOCAL),1)
+ssh:
+	@echo "ssh: LOCAL=1, you're already on the lab host."
+else
 ssh:
 	$(SSH)
+endif
 
 # ---- bring-up: BGP + bootstrap + ping --------------------------------------
 .PHONY: fabric-bootstrap
@@ -189,7 +218,11 @@ ui-backend:
 ui-frontend:
 	$(SSH) "mkdir -p $(UI_LOG_DIR)"
 	@echo "Starting Next.js dev server on $(REMOTE_HOST):3000 ..."
-	$(SSH) "cd $(REMOTE_REPO)/ui && NEXT_PUBLIC_AIDC_API_BASE='http://$(REMOTE_IP):8000' nohup pnpm dev >$(UI_FRONT_LOG) 2>&1 & echo \$$! >$(UI_FRONT_PID); disown"
+	# In LOCAL mode we don't pin NEXT_PUBLIC_AIDC_API_BASE — the frontend then
+	# auto-resolves the API host via window.location.hostname, which keeps it
+	# working whether you browse from this box (localhost) or from another
+	# machine on your LAN (using this box's IP).
+	$(SSH) "cd $(REMOTE_REPO)/ui && $(if $(filter 1,$(LOCAL)),,NEXT_PUBLIC_AIDC_API_BASE='http://$(REMOTE_IP):8000') nohup pnpm dev >$(UI_FRONT_LOG) 2>&1 & echo \$$! >$(UI_FRONT_PID); disown"
 	@echo "  URL: http://$(REMOTE_IP):3000"
 
 .PHONY: ui
@@ -250,10 +283,14 @@ wipe:
 .PHONY: solve
 solve:
 	@echo "Restoring switch FRR configs from git (working state)..."
+	# Write via `git show HEAD:path > path` rather than `git checkout path` so the
+	# target file is truncated in place — preserves its inode. Docker bind mounts
+	# track files by inode; a rename-based checkout would leave the running
+	# container attached to the old (orphaned) inode and never see the new content.
 	@for sw in $(SWITCHES_FRR); do \
-	  git checkout configs/frr/$$sw/frr.conf 2>/dev/null \
+	  git show HEAD:configs/frr/$$sw/frr.conf > configs/frr/$$sw/frr.conf 2>/dev/null \
 	    && echo "  restored configs/frr/$$sw/frr.conf" \
-	    || echo "  WARN: git checkout failed for $$sw — are you in a git checkout?"; \
+	    || echo "  WARN: git show failed for $$sw — are you in a git checkout?"; \
 	done
 	$(MAKE) sync
 	$(MAKE) fabric-bootstrap
