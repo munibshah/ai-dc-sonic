@@ -1,50 +1,42 @@
-# Solution — BGP underlay configuration
+# Solution — vtysh command sequences for every switch
 
-Full annotated configs for every switch, applied in the order that produces the cleanest progression of `show bgp summary` output. If you only want the answer key, the six `frr.conf` blocks below are it. If you want to *understand* the answer key, the annotations explain the WHY of every block.
+Just the commands, in build order. Open each switch's console in the UI, paste the block, verify. The *why* behind every line lives in [`01-exercise.md`](01-exercise.md) — this doc is the answer key.
 
-> **Shortcut**: `make solve` restores all 6 working configs from git in one command.
-
----
-
-## Approach
-
-- Per-switch FRR config lives at `configs/frr/<node>/frr.conf` on your laptop.
-- `make sync` rsyncs the repo to the remote box.
-- `make fabric-bootstrap` runs `bootstrap-switch.sh` inside every switch container, which restarts `zebra` + `bgpd` + `staticd` and runs `vtysh -b /etc/frr/frr.conf` to load the bind-mounted config.
-- Order doesn't strictly matter — once both ends of a peering are configured, the session establishes. Pedagogically, going spines-first means you can watch leaves' peers transition from `Active` → `Established` as you add each one.
+> **Shortcut**: if you just want to skip the exercise and get back to a working lab, run `make solve`. That `git checkout`s the committed `configs/frr/<node>/frr.conf` files (which already contain the working configuration) and reloads.
 
 ---
 
-## Step 1 — `spine1` (the worked example)
+## 1 — `spine1`
 
-Write this to `configs/frr/spine1/frr.conf`:
+Open the `spine1` console in the UI, then:
+
+```sh
+vtysh
+```
+
+Paste the entire block at the FRR prompt (which may render as `will-be-overridden#` — a cosmetic sonic-vs quirk):
 
 ```
-! AIDC Lab — spine1 (AS 65000)
-frr defaults datacenter
-hostname spine1
-log syslog informational
-service integrated-vtysh-config
-!
+configure terminal
 interface lo
  ip address 10.0.0.1/32
-!
+exit
 interface eth1
  description to_leaf1
  ip address 10.1.1.0/31
-!
+exit
 interface eth2
  description to_leaf2
  ip address 10.1.1.2/31
-!
+exit
 interface eth3
  description to_leaf3
  ip address 10.1.1.4/31
-!
+exit
 interface eth4
  description to_leaf4
  ip address 10.1.1.6/31
-!
+exit
 router bgp 65000
  bgp router-id 10.0.0.1
  bgp bestpath as-path multipath-relax
@@ -64,86 +56,181 @@ router bgp 65000
  neighbor 10.1.1.7 remote-as 65104
  neighbor 10.1.1.7 peer-group LEAVES
  neighbor 10.1.1.7 description leaf4
- !
  address-family ipv4 unicast
   network 10.0.0.1/32
   maximum-paths 64
   neighbor LEAVES activate
   neighbor LEAVES soft-reconfiguration inbound
  exit-address-family
-!
-line vty
-!
+end
 ```
 
-### What every block does
+**Verify**:
 
-- **`frr defaults datacenter`** — sets FRR's CLOS-friendly defaults: KEEPALIVE 3s / HOLDTIME 9s (fast convergence), maximum-paths defaults bumped, etc. The line `neighbor LEAVES timers 3 9` is redundant given this default, but it's explicit and makes the convergence time obvious to a reader.
-- **`hostname spine1`** + **`log syslog informational`** — gives `vtysh` a prompt label and makes logs land in `/var/log/syslog` inside the container.
-- **`interface lo / ip address 10.0.0.1/32`** — the spine's router-ID lives on the loopback. We also use it as a `network` advertisement target.
-- **`interface ethN / ip address <X.Y.Z>/31`** — `/31` per-link addressing (RFC 3021). Spine end is the even address (`.0`, `.2`, `.4`, `.6`); leaf end is the odd address. See [topology §4](../topology.md#4-link-inventory-the-16-links).
-- **`router bgp 65000`** — both spines share AS 65000. This is the standard CLOS pattern.
-- **`bgp router-id 10.0.0.1`** — explicit instead of inheriting from the highest interface IP, so it's deterministic across reboots.
-- **`bgp bestpath as-path multipath-relax`** — required for ECMP across both spines (see Task 4 in the exercise for the *why*).
-- **`no bgp default ipv4-unicast`** — disables FRR's auto-activation of the ipv4-unicast AF on every new neighbor. We'll activate explicitly under the peer-group. Standard production pattern.
-- **`neighbor LEAVES peer-group`** + **`neighbor 10.1.1.1 peer-group LEAVES`** — declare a peer-group, set common attributes on it once, bind each neighbor to the group. Cuts ~50% of the config.
-- **`neighbor LEAVES timers 3 9`** — keepalive 3s / holddown 9s. Fast convergence (≤ 9s) on link failures.
-- **`address-family ipv4 unicast`** block:
-  - `network 10.0.0.1/32` — advertise our loopback.
-  - `maximum-paths 64` — let the FIB hold up to 64 ECMP next-hops.
-  - `neighbor LEAVES activate` — explicitly activate the ipv4-unicast AF for everyone in the group.
-  - `neighbor LEAVES soft-reconfiguration inbound` — costs a little memory but lets you run `show bgp ipv4 unicast neighbor X received-routes` for debugging.
-
-### Apply + verify after step 1
-
-```bash
-make sync && make fabric-bootstrap
-make shell-spine1
-vtysh -c "show bgp summary"
+```
+show interface brief
+show bgp summary
 ```
 
-Expected: 4 leaf neighbors, all in `Active` (the leaves don't have BGP configured yet, so the sessions can't establish). That's fine — it'll go `Established` as you finish each leaf.
+Expected: every `eth1..4` and `lo` has its IP (the SONiC `EthernetN` rows shown alongside them are unused — ignore), all 4 leaf peers in `Active` state (leaves not configured yet).
 
 ---
 
-## Step 2 — `spine2`
+## 2 — `leaf1`
 
-Mirror of spine1 with these substitutions:
-- hostname → `spine2`
-- loopback → `10.0.0.2/32`
-- router-id → `10.0.0.2`
-- spine-side P2P IPs → use the `10.1.2.*` block (spine2 owns spine→leaf paths `10.1.2.0/31`, `10.1.2.2/31`, `10.1.2.4/31`, `10.1.2.6/31`)
-- neighbor peer IPs → spine2 talks to leaf1@`10.1.2.1`, leaf2@`10.1.2.3`, leaf3@`10.1.2.5`, leaf4@`10.1.2.7`
-- network statement advertises `10.0.0.2/32`
+Open the `leaf1` console.
 
-Full file:
+```sh
+vtysh
+```
 
 ```
-! AIDC Lab — spine2 (AS 65000)
-frr defaults datacenter
-hostname spine2
-log syslog informational
-service integrated-vtysh-config
-!
+configure terminal
+interface lo
+ ip address 10.0.1.1/32
+ ip address 10.0.10.1/32
+exit
+interface eth1
+ description to_spine1
+ ip address 10.1.1.1/31
+exit
+interface eth2
+ description to_spine2
+ ip address 10.1.2.1/31
+exit
+interface eth3
+ description to_gpu1
+ ip address 10.2.1.0/31
+exit
+interface eth4
+ description to_gpu2
+ ip address 10.2.1.2/31
+exit
+router bgp 65101
+ bgp router-id 10.0.1.1
+ bgp bestpath as-path multipath-relax
+ no bgp default ipv4-unicast
+ neighbor SPINES peer-group
+ neighbor SPINES advertisement-interval 0
+ neighbor SPINES timers 3 9
+ neighbor 10.1.1.0 remote-as 65000
+ neighbor 10.1.1.0 peer-group SPINES
+ neighbor 10.1.1.0 description spine1
+ neighbor 10.1.2.0 remote-as 65000
+ neighbor 10.1.2.0 peer-group SPINES
+ neighbor 10.1.2.0 description spine2
+ address-family ipv4 unicast
+  network 10.0.1.1/32
+  network 10.0.10.1/32
+  network 10.2.1.0/31
+  network 10.2.1.2/31
+  maximum-paths 64
+  neighbor SPINES activate
+  neighbor SPINES soft-reconfiguration inbound
+ exit-address-family
+end
+```
+
+**Verify** (within ~10s):
+
+```
+show bgp summary
+```
+
+Expected (the Established peer surfaces its description label):
+
+```
+Neighbor          V    AS    ...   State/PfxRcd
+spine1(10.1.1.0)  4   65000  ...   1            ← spine1 Established
+10.1.2.0          4   65000  ...   Active       ← spine2 not configured yet
+```
+
+---
+
+## 3 — `leaf2`
+
+```sh
+vtysh
+```
+
+```
+configure terminal
+interface lo
+ ip address 10.0.1.2/32
+ ip address 10.0.10.2/32
+exit
+interface eth1
+ description to_spine1
+ ip address 10.1.1.3/31
+exit
+interface eth2
+ description to_spine2
+ ip address 10.1.2.3/31
+exit
+interface eth3
+ description to_gpu3
+ ip address 10.2.2.0/31
+exit
+interface eth4
+ description to_gpu4
+ ip address 10.2.2.2/31
+exit
+router bgp 65102
+ bgp router-id 10.0.1.2
+ bgp bestpath as-path multipath-relax
+ no bgp default ipv4-unicast
+ neighbor SPINES peer-group
+ neighbor SPINES advertisement-interval 0
+ neighbor SPINES timers 3 9
+ neighbor 10.1.1.2 remote-as 65000
+ neighbor 10.1.1.2 peer-group SPINES
+ neighbor 10.1.1.2 description spine1
+ neighbor 10.1.2.2 remote-as 65000
+ neighbor 10.1.2.2 peer-group SPINES
+ neighbor 10.1.2.2 description spine2
+ address-family ipv4 unicast
+  network 10.0.1.2/32
+  network 10.0.10.2/32
+  network 10.2.2.0/31
+  network 10.2.2.2/31
+  maximum-paths 64
+  neighbor SPINES activate
+  neighbor SPINES soft-reconfiguration inbound
+ exit-address-family
+end
+```
+
+After this step: leaf1 ↔ leaf2 reachability is up via spine1. `gpu1 → gpu3` should ping. Still single-path (spine2 down).
+
+---
+
+## 4 — `spine2`
+
+```sh
+vtysh
+```
+
+```
+configure terminal
 interface lo
  ip address 10.0.0.2/32
-!
+exit
 interface eth1
  description to_leaf1
  ip address 10.1.2.0/31
-!
+exit
 interface eth2
  description to_leaf2
  ip address 10.1.2.2/31
-!
+exit
 interface eth3
  description to_leaf3
  ip address 10.1.2.4/31
-!
+exit
 interface eth4
  description to_leaf4
  ip address 10.1.2.6/31
-!
+exit
 router bgp 65000
  bgp router-id 10.0.0.2
  bgp bestpath as-path multipath-relax
@@ -163,222 +250,216 @@ router bgp 65000
  neighbor 10.1.2.7 remote-as 65104
  neighbor 10.1.2.7 peer-group LEAVES
  neighbor 10.1.2.7 description leaf4
- !
  address-family ipv4 unicast
   network 10.0.0.2/32
   maximum-paths 64
   neighbor LEAVES activate
   neighbor LEAVES soft-reconfiguration inbound
  exit-address-family
-!
-line vty
-!
+end
 ```
 
-Apply + verify: same as step 1, but on `spine2`. Both spines now configured; leaves still empty.
+**ECMP-arrived verification** (on leaf1):
+
+```
+show ip route 10.0.1.2
+```
+
+Expected: 2 next-hops.
+
+```
+Routing entry for 10.0.1.2/32
+  Known via "bgp", distance 20, metric 0, best
+  Last update 00:00:08 ago
+  * 10.1.1.0, via eth1, weight 1
+  * 10.1.2.0, via eth2, weight 1
+```
+
+(For the compact `B>*` form across the whole routing table, use `show ip route bgp`.)
 
 ---
 
-## Step 3 — `leaf1` (the second worked example)
+## 5 — `leaf3`
+
+```sh
+vtysh
+```
 
 ```
-! AIDC Lab — leaf1 (AS 65101)
-frr defaults datacenter
-hostname leaf1
-log syslog informational
-service integrated-vtysh-config
-!
+configure terminal
 interface lo
- ip address 10.0.1.1/32
- ip address 10.0.10.1/32
-!
+ ip address 10.0.1.3/32
+ ip address 10.0.10.3/32
+exit
 interface eth1
  description to_spine1
- ip address 10.1.1.1/31
-!
+ ip address 10.1.1.5/31
+exit
 interface eth2
  description to_spine2
- ip address 10.1.2.1/31
-!
+ ip address 10.1.2.5/31
+exit
 interface eth3
- description to_gpu1
- ip address 10.2.1.0/31
-!
+ description to_gpu5
+ ip address 10.2.3.0/31
+exit
 interface eth4
- description to_gpu2
- ip address 10.2.1.2/31
-!
-router bgp 65101
- bgp router-id 10.0.1.1
+ description to_gpu6
+ ip address 10.2.3.2/31
+exit
+router bgp 65103
+ bgp router-id 10.0.1.3
  bgp bestpath as-path multipath-relax
  no bgp default ipv4-unicast
  neighbor SPINES peer-group
  neighbor SPINES advertisement-interval 0
  neighbor SPINES timers 3 9
- neighbor 10.1.1.0 remote-as 65000
- neighbor 10.1.1.0 peer-group SPINES
- neighbor 10.1.1.0 description spine1
- neighbor 10.1.2.0 remote-as 65000
- neighbor 10.1.2.0 peer-group SPINES
- neighbor 10.1.2.0 description spine2
- !
+ neighbor 10.1.1.4 remote-as 65000
+ neighbor 10.1.1.4 peer-group SPINES
+ neighbor 10.1.1.4 description spine1
+ neighbor 10.1.2.4 remote-as 65000
+ neighbor 10.1.2.4 peer-group SPINES
+ neighbor 10.1.2.4 description spine2
  address-family ipv4 unicast
-  network 10.0.1.1/32
-  network 10.0.10.1/32
-  network 10.2.1.0/31
-  network 10.2.1.2/31
+  network 10.0.1.3/32
+  network 10.0.10.3/32
+  network 10.2.3.0/31
+  network 10.2.3.2/31
   maximum-paths 64
   neighbor SPINES activate
   neighbor SPINES soft-reconfiguration inbound
  exit-address-family
-!
-line vty
-!
-```
-
-### What's different from a spine?
-
-- **Per-leaf ASN** (`65101` here) — not shared like the spines.
-- **Two loopbacks**: `10.0.1.1/32` is the router-ID; `10.0.10.1/32` is the reserved VTEP for the Phase 3 EVPN overlay. Advertise both now.
-- **Worker `/31` `network` statements** (`10.2.1.0/31` and `10.2.1.2/31`) — workers don't run BGP, so the leaf is the one that injects their fabric subnets into BGP. Without these, gpu1 and gpu2 are unreachable from other leaves.
-- **Peer-group is named `SPINES`** (not `LEAVES`), with the two spine peers bound to it.
-
-### Apply + verify after step 3
-
-```bash
-make sync && make fabric-bootstrap
-make shell-leaf1
-vtysh -c "show bgp summary"
-```
-
-Expected:
-
-```
-Neighbor         V  AS     ...  PfxRcd
-spine1(10.1.1.0) 4  65000  ...  1
-spine2(10.1.2.0) 4  65000  ...  1
-```
-
-PfxRcd=1 right now because each spine is only advertising its own loopback. As you add more leaves (steps 4–6), this number grows. End state is **PfxRcd=13** per spine peer (1 spine loopback + 4 prefixes × 3 other leaves).
-
----
-
-## Steps 4–6 — `leaf2`, `leaf3`, `leaf4`
-
-Same template as leaf1 with these substitutions:
-
-| Field                    | leaf2          | leaf3          | leaf4          |
-|--------------------------|----------------|----------------|----------------|
-| ASN                      | `65102`        | `65103`        | `65104`        |
-| Loopback (router-id)     | `10.0.1.2/32`  | `10.0.1.3/32`  | `10.0.1.4/32`  |
-| Loopback (VTEP)          | `10.0.10.2/32` | `10.0.10.3/32` | `10.0.10.4/32` |
-| `eth1` (to spine1)       | `10.1.1.3/31`  | `10.1.1.5/31`  | `10.1.1.7/31`  |
-| `eth2` (to spine2)       | `10.1.2.3/31`  | `10.1.2.5/31`  | `10.1.2.7/31`  |
-| `eth3` (to first worker) | `10.2.2.0/31`  | `10.2.3.0/31`  | `10.2.4.0/31`  |
-| `eth4` (to second worker)| `10.2.2.2/31`  | `10.2.3.2/31`  | `10.2.4.2/31`  |
-| Worker descriptions      | `gpu3`, `gpu4` | `gpu5`, `gpu6` | `gpu7`, `gpu8` |
-| Spine1 neighbor          | `10.1.1.2`     | `10.1.1.4`     | `10.1.1.6`     |
-| Spine2 neighbor          | `10.1.2.2`     | `10.1.2.4`     | `10.1.2.6`     |
-| `network` lines (4 each) | `10.0.1.2/32`<br>`10.0.10.2/32`<br>`10.2.2.0/31`<br>`10.2.2.2/31` | `10.0.1.3/32`<br>`10.0.10.3/32`<br>`10.2.3.0/31`<br>`10.2.3.2/31` | `10.0.1.4/32`<br>`10.0.10.4/32`<br>`10.2.4.0/31`<br>`10.2.4.2/31` |
-
-If you'd rather just see the full files: `git show HEAD:configs/frr/leaf2/frr.conf` (and so on) once you've committed, or `make solve` to restore them.
-
-After each leaf, `make sync && make fabric-bootstrap` and watch the PfxRcd numbers climb on the already-configured switches.
-
----
-
-## Step 7 — End-to-end verification
-
-After all 6 switches are configured:
-
-### Interfaces
-
-```bash
-make shell-leaf1
-ip -br addr show | grep -E "^(lo|eth)"
-```
-
-Expected on leaf1:
-```
-lo               UNKNOWN        127.0.0.1/8 ::1/128 10.0.1.1/32 10.0.10.1/32
-eth0@if...       UP             172.20.20.21/24
-eth1@if...       UP             10.1.1.1/31
-eth2@if...       UP             10.1.2.1/31
-eth3@if...       UP             10.2.1.0/31
-eth4@if...       UP             10.2.1.2/31
-```
-
-### BGP peers
-
-```bash
-vtysh -c "show bgp summary"
-```
-
-Expected on a leaf:
-```
-Neighbor         V  AS     ...  PfxRcd  PfxSnt
-spine1(10.1.1.0) 4  65000  ...  13      18
-spine2(10.1.2.0) 4  65000  ...  13      18
-```
-
-Expected on a spine:
-```
-Neighbor        V  AS     ...  PfxRcd  PfxSnt
-leaf1(10.1.1.1) 4  65101  ...  4       17
-leaf2(10.1.1.3) 4  65102  ...  4       17
-leaf3(10.1.1.5) 4  65103  ...  4       17
-leaf4(10.1.1.7) 4  65104  ...  4       17
-```
-
-Numbers: each leaf advertises 4 prefixes (loopback + VTEP + 2 worker /31s). Each spine relays the 4 from each of 3 other leaves + its own loopback = 13 prefixes shown back to any leaf. PfxSnt is higher because of the soft-reconfiguration inbound bookkeeping.
-
-### Routes & ECMP
-
-```bash
-vtysh -c "show ip route bgp" | head -10
-vtysh -c "show ip route 10.0.1.3"
-```
-
-The route to `leaf3`'s loopback should have **two** next-hops:
-
-```
-B>* 10.0.1.3/32 [20/0] via 10.1.1.0, eth1, weight 1
-   *                   via 10.1.2.0, eth2, weight 1
-```
-
-That's ECMP working. Different 5-tuples will hash to one path or the other.
-
-### End-to-end pings
-
-```bash
-make ping-mesh
-```
-
-Expected: 56 lines all showing `OK`.
-
-### One-shot
-
-```bash
-make lab-status
+end
 ```
 
 ---
 
-## Common mistakes
+## 6 — `leaf4`
+
+```sh
+vtysh
+```
+
+```
+configure terminal
+interface lo
+ ip address 10.0.1.4/32
+ ip address 10.0.10.4/32
+exit
+interface eth1
+ description to_spine1
+ ip address 10.1.1.7/31
+exit
+interface eth2
+ description to_spine2
+ ip address 10.1.2.7/31
+exit
+interface eth3
+ description to_gpu7
+ ip address 10.2.4.0/31
+exit
+interface eth4
+ description to_gpu8
+ ip address 10.2.4.2/31
+exit
+router bgp 65104
+ bgp router-id 10.0.1.4
+ bgp bestpath as-path multipath-relax
+ no bgp default ipv4-unicast
+ neighbor SPINES peer-group
+ neighbor SPINES advertisement-interval 0
+ neighbor SPINES timers 3 9
+ neighbor 10.1.1.6 remote-as 65000
+ neighbor 10.1.1.6 peer-group SPINES
+ neighbor 10.1.1.6 description spine1
+ neighbor 10.1.2.6 remote-as 65000
+ neighbor 10.1.2.6 peer-group SPINES
+ neighbor 10.1.2.6 description spine2
+ address-family ipv4 unicast
+  network 10.0.1.4/32
+  network 10.0.10.4/32
+  network 10.2.4.0/31
+  network 10.2.4.2/31
+  maximum-paths 64
+  neighbor SPINES activate
+  neighbor SPINES soft-reconfiguration inbound
+ exit-address-family
+end
+```
+
+---
+
+## End-to-end verification
+
+From your laptop:
+
+```bash
+make bgp-check    # every leaf-spine session Established, PfxRcd=13 (leaf side) / 4 (spine side)
+make ping-mesh    # 56 / 56 OK
+make lab-status   # one-shot summary
+```
+
+Or per-switch via UI consoles:
+
+```sh
+# any leaf
+vtysh -c "show ip route 10.0.1.3"     # expect 2 next-hops (ECMP)
+vtysh -c "show bgp summary"           # 2 spine peers Established, PfxRcd=13 each
+
+# any spine
+vtysh -c "show bgp summary"           # 4 leaf peers Established, PfxRcd=4 each
+```
+
+---
+
+## Appendix A — Common mistakes
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Peer stuck in `Active` after both ends configured | Wrong neighbor IP on one side, or `eth*` interface down | Check `ip -br link` inside both containers; double-check both sides agree on which `/31` IP each end owns (table in [topology.md §4](../topology.md#4-link-inventory-the-16-links)) |
-| Peer `Established` but `PfxRcd` stays 0 | Missing `neighbor X activate` (you turned off `default ipv4-unicast` but didn't re-activate per AF) | Add `neighbor SPINES activate` (or `LEAVES activate` on the spine) inside `address-family ipv4 unicast` |
-| Routes received but `show ip route` shows only 1 next-hop instead of 2 | Missing `bgp bestpath as-path multipath-relax` | Add it under `router bgp <asn>` |
-| Workers on the same leaf can ping each other but cross-leaf pings fail | The leaf didn't `network` its worker `/31`s, so other leaves don't learn how to reach them | Add `network 10.2.X.0/31` and `network 10.2.X.2/31` inside `address-family ipv4 unicast` on the leaf |
-| `show ip route 10.0.1.3` shows 2 ECMP paths on leaf1, but only 1 path is actually used in a `traceroute` | This is normal — per-flow ECMP hashes on the 5-tuple; for any single flow, the same path is chosen every time. Vary src/dst port to see the other path. | Not a bug |
+| You typed your config but `do show interface brief` shows no IPs | You're in `(config-router)#` or `(config-bgp)#`, not at the interface block. The IP commands silently went into the BGP context. | `end` to get out, then re-enter `configure terminal` → `interface eth1` |
+| Peer stuck in `Active` after both ends configured | Wrong neighbor IP on one side, OR you typed the local-end IP instead of the remote-end IP, OR `eth*` is down | `do show interface brief` to confirm IPs match the topology doc; cross-check both sides — leaf1's `neighbor 10.1.1.0` must match spine1's local IP, and vice versa |
+| Peer `Established` but `PfxRcd` stays 0 | You set `no bgp default ipv4-unicast` but forgot the `neighbor X activate` inside `address-family ipv4 unicast` | Re-enter `router bgp <asn>` → `address-family ipv4 unicast` → `neighbor SPINES activate` (or `LEAVES activate` on a spine) |
+| Routes received but `show ip route 10.0.1.X` shows only 1 next-hop instead of 2 | Missing `bgp bestpath as-path multipath-relax` — without it, BGP rejects ECMP across the shared-AS spines | Re-enter `router bgp <asn>` → `bgp bestpath as-path multipath-relax` |
+| Workers on the same leaf can ping each other but cross-leaf pings fail | The leaf didn't `network` its worker `/31`s — other leaves never learn how to reach them | Re-enter `router bgp <asn>` → `address-family ipv4 unicast` → `network 10.2.X.0/31` + `network 10.2.X.2/31` |
+| `show ip route 10.0.1.3` shows 2 ECMP paths on leaf1, but `traceroute` always takes the same one | Not a bug — per-flow ECMP hashes on the 5-tuple, so a single flow consistently picks one path | Vary source/dest port to see the other path: `traceroute -p 12345 10.2.3.1` vs `traceroute -p 12346 10.2.3.1` |
+| You typed `exit` once too many and dropped out of vtysh | The vtysh shell exits when you `exit` past the top level | Run `vtysh` again, then `configure terminal`. Anything already applied is still there. |
 
 ---
 
-## Want to skip ahead?
+## Appendix B — vtysh ↔ frr.conf mapping
+
+The vtysh commands you typed and the `configs/frr/<switch>/frr.conf` file format are almost 1:1. Here's the translation if you want to persist your work via file-edit + `make sync && make fabric-bootstrap`:
+
+| In vtysh                                  | In `frr.conf`                          |
+|-------------------------------------------|----------------------------------------|
+| `configure terminal`                      | (implicit — everything below is config) |
+| `interface eth1` ... `exit`               | `interface eth1` ... `!`               |
+| `ip address 10.1.1.0/31`                  | ` ip address 10.1.1.0/31`              |
+| `router bgp 65000` ... `exit`             | `router bgp 65000` ... `!`             |
+| `neighbor LEAVES peer-group`              | ` neighbor LEAVES peer-group`          |
+| `address-family ipv4 unicast` ... `exit-address-family` | ` address-family ipv4 unicast` ... ` exit-address-family` |
+| `end` / `exit`                            | (not used — file just has top-level blocks separated by `!`) |
+
+Notes:
+
+- In `frr.conf`, indentation is significant: lines inside `interface ethN` start with a single leading space; lines inside `address-family ...` start with two leading spaces (because they're nested inside `router bgp`).
+- The file needs a `!` between top-level blocks (between the `interface` blocks and `router bgp`, etc.) — this is FRR's block terminator.
+- The file also needs these boilerplate lines at the top (already present in the skeleton):
+  ```
+  frr defaults datacenter
+  hostname <name>
+  log syslog informational
+  service integrated-vtysh-config
+  ```
+  and a `line vty` block at the bottom.
+
+The cleanest way to see this in action: look at any committed `configs/frr/<switch>/frr.conf` after running `make solve`. Each file is exactly what `vtysh -b` consumes to reproduce what you typed interactively.
+
+---
+
+## Appendix C — Want to revert?
 
 ```bash
-make solve         # git checkout the working configs + apply
-make lab-status    # confirm 56/56 + Established
+make solve         # restores all 6 frr.conf from git and re-applies
+make lab-status    # confirm 56/56 OK + BGP Established everywhere
 ```
