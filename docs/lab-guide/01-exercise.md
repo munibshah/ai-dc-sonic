@@ -116,7 +116,28 @@ router bgp 65000
  no bgp default ipv4-unicast
 ```
 
-> 💡 **What ASN do spines use?** Both spines share **AS 65000**. Why? In a 2-spine CLOS, both spines must be path-equivalent from a leaf's perspective. If spine1 = 65001 and spine2 = 65002, BGP's AS_PATH logic would have to evaluate inter-spine paths (longer AS_PATH = less preferred). With a shared spine ASN, every leaf sees both spines as exactly equal, and there's no inter-spine peering required. This is the "shared spine AS" pattern documented across every hyperscale fabric design.
+> 💡 **The ASN allocation, and why it looks like this**
+>
+> Every switch in this fabric has an ASN:
+>
+> | Device  | ASN   | Notes                              |
+> |---------|-------|------------------------------------|
+> | spine1  | 65000 | Both spines share one ASN          |
+> | spine2  | 65000 | (same)                             |
+> | leaf1   | 65101 | Each leaf gets a unique ASN        |
+> | leaf2   | 65102 |                                    |
+> | leaf3   | 65103 |                                    |
+> | leaf4   | 65104 |                                    |
+>
+> All of these are in the **private AS range** (RFC 6996: 64512–65534). Like RFC 1918 for IPs, private ASNs are reserved for internal use — they never appear in the public BGP table.
+>
+> **Why eBGP-everywhere, not iBGP + an IGP?** Traditional enterprise designs run an IGP (OSPF / IS-IS) for underlay reachability and iBGP on top for service routes. AI/hyperscale CLOS flips this: every adjacent pair speaks **eBGP**, end of story. Three benefits:
+>
+> 1. **Loop prevention is free** — eBGP rejects any route whose AS_PATH already contains the receiver's own AS. In a CLOS where every leaf has a unique AS, loops are mathematically impossible without writing a single line of filtering. No IGP split-horizon, no TTL hacks.
+> 2. **No full mesh, no route reflectors** — iBGP requires either a full mesh of sessions OR route-reflector hierarchies to propagate external routes. eBGP-only sidesteps both. At 1000+ switches, RR scaling becomes its own engineering problem.
+> 3. **One control plane to debug** — when something is broken, it's broken in BGP. There's no IGP that might also be wrong, no redistribution boundary to chase.
+>
+> **Why both spines share AS 65000?** In a 2-spine CLOS, both spines must be path-equivalent from a leaf's perspective. If spine1=65001 and spine2=65002, every cross-leaf path would have to traverse the inter-spine link (longer AS_PATH = less preferred), and we'd need spine-to-spine peering to glue it together. With a shared spine ASN, every leaf sees both spines as exactly equal-cost, and the spines never have to talk to each other. This is the "shared spine AS" pattern documented across every hyperscale fabric design.
 
 > 💡 **What's `multipath-relax`?** Default BGP requires the AS_PATH to be **identical** (byte-for-byte) across paths to call them equal-cost. In our CLOS, leaf1 sees leaf3's loopback via two paths: `[65000 65103]` via spine1 and `[65000 65103]` via spine2 — same content, but a strict implementation can still treat them as distinct. `multipath-relax` loosens the rule to "same length, same neighbor AS." This is *the* knob that makes ECMP work in CLOS with shared spine ASNs. Without it, ECMP silently collapses to a single next-hop and you'd never know until your training run was 2× slower than expected.
 
@@ -280,7 +301,13 @@ router bgp 65101
  neighbor 10.1.2.0 description spine2
 ```
 
-> 💡 **Why a unique ASN per leaf?** Failure isolation. If leaf2 misconfigures and starts advertising garbage prefixes, every other device in the fabric sees them as "originated by AS 65102" — trivial to trace, trivial to filter at a spine with a `route-map deny match as-path`. With every leaf sharing one AS, you'd have to disambiguate by router-id or BGP community — much messier in incident response. At hyperscale operability, this kind of design choice pays off in 3am pages.
+> 💡 **Why a unique ASN per leaf?** Three reasons, each one paying for itself many times over at scale:
+>
+> 1. **Failure isolation and attribution** — if leaf2 misconfigures and starts advertising garbage prefixes, every other device in the fabric sees them as "originated by AS 65102." Trivial to trace, trivial to filter at a spine with `route-map deny match as-path`. With every leaf sharing one AS, you'd disambiguate by router-id or BGP community — much more friction in incident response.
+> 2. **Loop prevention only works because of this** — recall eBGP's own-AS rejection rule (covered in the spine1 callout). That rule only buys you anything if every leaf actually has a *unique* AS. With same-AS leaves, the natural loop prevention disappears and you'd need additional config (community-based filters, allowas-in tweaks) just to keep the topology safe. The unique-per-leaf scheme is what makes eBGP-everywhere viable in the first place.
+> 3. **Per-leaf policy becomes a one-liner** — want to drain leaf3 for maintenance? `route-map drain deny match as-path 65103` on both spines, traffic shifts to the others automatically. Want to redirect leaf2 to a specific upstream during an upgrade? Match its AS, set local-pref. With shared leaf ASNs, every per-leaf policy needs additional tagging or router-id matching.
+>
+> At hyperscale operability, this kind of attribution capability pays off in 3am pages.
 
 ### Activate and advertise
 
