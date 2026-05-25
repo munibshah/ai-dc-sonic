@@ -88,6 +88,30 @@ topology:
       binds:
         - ../configs/frr/leaf4/frr.conf:/etc/frr/frr.conf
 
+    # ---- control plane (FastAPI orchestrator + Next.js UI) ----
+    # These run inside containerlab so `make warm` brings up the entire stack
+    # in one shot. The orchestrator mounts the host docker socket to exec into
+    # the other lab containers; the UI is the browser-facing front-end.
+    orchestrator:
+      kind: linux
+      group: control
+      image: ${ORCHESTRATOR_IMAGE}
+      mgmt-ipv4: 172.20.20.5
+      ports:
+        - "8000:8000"
+      binds:
+        - /var/run/docker.sock:/var/run/docker.sock
+        - ../docs:/repo/docs:ro
+      env:
+        AIDC_REPO_ROOT: /repo
+    ui:
+      kind: linux
+      group: control
+      image: ${UI_IMAGE}
+      mgmt-ipv4: 172.20.20.6
+      ports:
+        - "3000:3000"
+
     # ---- gpu workers (arm64 native, real CPU collective ops) ----
     gpu1:
       kind: linux

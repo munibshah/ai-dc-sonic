@@ -92,17 +92,9 @@ sudo usermod -aG docker $USER
 # (c) Containerlab (uses curl + sudo; will add you to the clab_admins group):
 bash -c "$(curl -sL https://get.containerlab.dev)"
 
-# (d) Python for the orchestrator (FastAPI backend):
-sudo apt-get install -y python3-venv python3-pip
-
-# (e) Node.js + pnpm for the UI. NOT 'apt install nodejs' — Ubuntu 22.04's
-#     apt nodejs is v12 and pnpm@9 requires Node >=18.12. NodeSource has
-#     current LTS packaged:
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install -g pnpm@9
-# (Pin pnpm@9; pnpm 10/11 hard-fail on the sharp ignored-build-script issue
-#  during `pnpm install` for the Next.js UI.)
+# (Python and Node.js are no longer required on the host — the FastAPI
+# orchestrator and Next.js UI ship as their own Docker images and are
+# brought up by containerlab alongside the lab fabric.)
 
 # Log out and back in (or `newgrp docker && newgrp clab_admins`) so the
 # group changes take effect, then check:
@@ -182,33 +174,47 @@ If you want to access the UI from another machine on the LAN, the Next.js dev se
 
 Successful `warm` ends with all 56 worker-pair pings passing and BGP up on every switch.
 
-### About the worker image
+### About the lab images
 
-`make pull` brings down two images:
+`make pull` brings down four images. None of them are built on the host by default; all are `docker pull`s from upstream / Hub:
 
-- `netreplica/docker-sonic-vs:latest` — the SONiC NOS image (upstream, ~270 MB).
-- `munibshah/aidc-worker:latest` — the GPU-worker image (multi-arch amd64/arm64, ~1.5 GB), maintained by this repo's admin. Built from [`workers/Dockerfile`](workers/Dockerfile).
+| Image | What it is | Source |
+|---|---|---|
+| `netreplica/docker-sonic-vs:latest` | The SONiC NOS for the spine and leaf switches (upstream, ~270 MB) | [netreplica](https://hub.docker.com/r/netreplica/docker-sonic-vs) |
+| `munibshah/aidc-worker:latest` | GPU-worker image (multi-arch amd64/arm64, ~1.5 GB) — Python + PyTorch CPU + Gloo + iperf3 + tcpdump | [workers/Dockerfile](workers/Dockerfile) |
+| `munibshah/aidc-orchestrator:latest` | FastAPI backend that drives the in-browser device consoles (multi-arch, ~250 MB) | [orchestrator/Dockerfile](orchestrator/Dockerfile) |
+| `munibshah/aidc-ui:latest` | Next.js UI in production mode (multi-arch, ~1.2 GB) | [ui/Dockerfile](ui/Dockerfile) |
 
-You don't need to build either one — both are just `docker pull`s. The default is set in the Makefile (`WORKER_IMAGE := munibshah/aidc-worker:latest`); override it with `make WORKER_IMAGE=... pull` if you maintain your own fork.
-
-If you're hacking on the worker `Dockerfile` and want to run with your local changes instead of the published image:
-
+The defaults are set in the Makefile (`WORKER_IMAGE`, `ORCHESTRATOR_IMAGE`, `UI_IMAGE`). Override per-invocation if you maintain your own fork:
 ```bash
-make WORKER_IMAGE=aidc/worker:latest build-worker
-make WORKER_IMAGE=aidc/worker:latest LOCAL=1 warm
+make WORKER_IMAGE=otheruser/aidc-worker:v2 pull
+```
+
+If you're hacking on a Dockerfile and want to test your local changes against the lab, the build-* targets switch `make pull` into local-build mode for that component:
+```bash
+make ORCHESTRATOR_IMAGE=aidc/orchestrator:latest build-orchestrator
+make ORCHESTRATOR_IMAGE=aidc/orchestrator:latest warm
+```
+
+Maintainer publish flow (admin only, runs from your Mac):
+```bash
+docker login
+./scripts/publish-worker.sh        # munibshah/aidc-worker:latest
+./scripts/publish-orchestrator.sh  # munibshah/aidc-orchestrator:latest
+./scripts/publish-ui.sh            # munibshah/aidc-ui:latest
 ```
 
 ### Web UI (Phase 2)
 
+The orchestrator and UI come up as containers alongside the rest of the lab — `make warm` (or just `make up`) brings up the full stack. Browse to `http://<remote>:3000` (or `http://localhost:3000` in `LOCAL=1` mode).
+
 ```bash
-make ui-deps          # one-time: install FastAPI venv + Next.js node_modules on the remote
-make ui               # start backend + frontend on the remote
-open http://<remote-host>:3000   # labs index → click Lab 1 to enter the workbench
-make ui-smoke         # headless WebSocket smoke test (no browser needed)
-make ui-stop          # stop both
+make logs-orchestrator   # tail FastAPI logs (docker logs orchestrator --tail 50)
+make logs-ui             # tail Next.js logs
+make shell-orchestrator  # interactive shell inside the FastAPI container
 ```
 
-Both backend (`orchestrator/api/main.py`) and frontend (`ui/`, Next.js + xterm.js + react-markdown) run **on the remote**. The backend uses a real PTY (`docker exec -it`) and proxies stdio over a WebSocket. The frontend pages:
+Both backend (`orchestrator/api/main.py`, [Dockerfile](orchestrator/Dockerfile)) and frontend (`ui/`, Next.js + xterm.js + react-markdown, [Dockerfile](ui/Dockerfile)) run as containers managed by containerlab. The backend mounts `/var/run/docker.sock` from the host so it can `docker exec -it` into the other lab containers; it streams stdio over a WebSocket to the browser. The frontend pages:
 
 - **/** — **Labs index.** Cards for each lab (Lab 1 active; Labs 2–4 are placeholders for future content).
 - **/labs/&lt;id&gt;** — **Lab workbench.** Free-scroll markdown guide on the left + tabbed terminal pane on the right + a "Topology" button that pops a clickable fabric diagram for picking which device to console into. Multiple terminals stay open across tab switches.

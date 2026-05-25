@@ -39,15 +39,21 @@ WORKERS  := gpu1 gpu2 gpu3 gpu4 gpu5 gpu6 gpu7 gpu8
 LEAVES   := leaf1 leaf2 leaf3 leaf4
 SPINES   := spine1 spine2
 
-# Worker container image. Defaults to the pre-built multi-arch image on
-# Docker Hub — `make pull` will docker-pull it, no local build needed.
+# Lab container images. All three default to pre-built multi-arch images on
+# Docker Hub — `make pull` will docker-pull them, no local builds needed.
 #
-# Dockerfile developers can opt back into a local build with:
-#   make WORKER_IMAGE=aidc/worker:latest build-worker
-#   make WORKER_IMAGE=aidc/worker:latest LOCAL=1 warm
+# Dockerfile developers can opt back into a local build by overriding the
+# corresponding *_IMAGE var to its local-build tag (e.g. aidc/worker:latest),
+# which flips `make pull` to use `make build-<component>` instead of pulling.
 #
-# Maintainers republish via scripts/publish-worker.sh (multi-arch buildx).
-WORKER_IMAGE ?= munibshah/aidc-worker:latest
+# Maintainers republish via the scripts/publish-*.sh helpers (multi-arch buildx).
+WORKER_IMAGE       ?= munibshah/aidc-worker:latest
+ORCHESTRATOR_IMAGE ?= munibshah/aidc-orchestrator:latest
+UI_IMAGE           ?= munibshah/aidc-ui:latest
+
+# All env vars containerlab needs to substitute into topo/aidc.clab.yml.
+# Used as a prefix to every `containerlab ...` invocation.
+CLAB_ENV := WORKER_IMAGE=$(WORKER_IMAGE) ORCHESTRATOR_IMAGE=$(ORCHESTRATOR_IMAGE) UI_IMAGE=$(UI_IMAGE)
 
 # ---- help ------------------------------------------------------------------
 .PHONY: help
@@ -58,33 +64,28 @@ help:
 	@echo ""
 	@echo "  ---- One-time setup ----"
 	@echo "  make sync             rsync local repo -> $(REMOTE_HOST):$(REMOTE_REPO)"
-	@echo "  make pull             pull sonic-vs image + build worker image (remote)"
-	@echo "  make ui-deps          install backend pip + frontend pnpm deps (remote)"
+	@echo "  make pull             pull all lab images (sonic-vs, worker, orchestrator, ui)"
 	@echo ""
 	@echo "  ---- Lab lifecycle ----"
-	@echo "  make up               clab deploy (14 containers)"
+	@echo "  make up               clab deploy (16 containers: 14 lab + orchestrator + ui)"
 	@echo "  make down             clab destroy --cleanup"
 	@echo "  make reload           down + up"
 	@echo "  make warm             up + bootstrap + bgp-check + ping-mesh"
 	@echo "  make fabric-bootstrap (re)apply FRR config + restart bgpd on every switch"
 	@echo ""
 	@echo "  ---- Inspection ----"
-	@echo "  make ping-mesh        pairwise ping across all gpu workers"
-	@echo "  make bgp-check        'show bgp summary' on every switch"
-	@echo "  make shell-<node>     exec into a container (e.g. make shell-leaf1)"
-	@echo "  make ps               list running lab containers"
-	@echo "  make ssh              open an interactive ssh session to $(REMOTE_HOST)"
-	@echo ""
-	@echo "  ---- UI (Phase 2) ----"
-	@echo "  make ui               start FastAPI + Next.js (binds 0.0.0.0)"
-	@echo "  make ui-stop          stop both"
-	@echo "  make ui-logs          tail both logs"
-	@echo "  make ui-smoke         CLI WebSocket end-to-end test"
-	@echo "  open http://$(REMOTE_IP):3000  (Mac browser)"
+	@echo "  make ping-mesh         pairwise ping across all gpu workers"
+	@echo "  make bgp-check         'show bgp summary' on every switch"
+	@echo "  make shell-<node>      exec into a container (e.g. make shell-leaf1)"
+	@echo "  make logs-orchestrator tail FastAPI backend logs"
+	@echo "  make logs-ui           tail Next.js frontend logs"
+	@echo "  make ps                list running lab containers"
+	@echo "  make ssh               open an interactive ssh session to $(REMOTE_HOST)"
+	@echo "  open http://$(REMOTE_IP):3000   labs index (browser)"
 	@echo ""
 	@echo "  ---- Lab guide (docs/lab-guide/) ----"
 	@echo "  make wipe             blank the switch FRR configs (enter exercise mode)"
-	@echo "  make solve            restore working configs via 'git checkout' (exit exercise mode)"
+	@echo "  make solve            restore working configs via 'git show' (exit exercise mode)"
 	@echo "  make lab-status       quick \"am I done?\" summary"
 
 # ---- sync ------------------------------------------------------------------
@@ -116,9 +117,10 @@ sync:
 endif
 
 # ---- pull / build ----------------------------------------------------------
-# `make pull` brings the sonic-vs base image down, then either builds the
-# worker image locally (if WORKER_IMAGE is the default local-build tag) or
-# pulls the worker image from its registry (if WORKER_IMAGE is overridden).
+# `make pull` brings the sonic-vs base image down, then for each of the three
+# lab images either builds locally (if the *_IMAGE var is its local-build
+# default) or pulls from the registry (if it's been overridden / left at the
+# Hub default).
 .PHONY: pull
 pull:
 	$(RUN) docker pull netreplica/docker-sonic-vs:latest
@@ -129,6 +131,20 @@ pull:
 	  echo "WORKER_IMAGE=$(WORKER_IMAGE) — pulling from registry."; \
 	  $(RUN) docker pull $(WORKER_IMAGE); \
 	fi
+	@if [ "$(ORCHESTRATOR_IMAGE)" = "aidc/orchestrator:latest" ]; then \
+	  echo "ORCHESTRATOR_IMAGE=$(ORCHESTRATOR_IMAGE) — building locally."; \
+	  $(MAKE) build-orchestrator; \
+	else \
+	  echo "ORCHESTRATOR_IMAGE=$(ORCHESTRATOR_IMAGE) — pulling from registry."; \
+	  $(RUN) docker pull $(ORCHESTRATOR_IMAGE); \
+	fi
+	@if [ "$(UI_IMAGE)" = "aidc/ui:latest" ]; then \
+	  echo "UI_IMAGE=$(UI_IMAGE) — building locally."; \
+	  $(MAKE) build-ui; \
+	else \
+	  echo "UI_IMAGE=$(UI_IMAGE) — pulling from registry."; \
+	  $(RUN) docker pull $(UI_IMAGE); \
+	fi
 
 .PHONY: build-worker
 build-worker:
@@ -137,15 +153,24 @@ build-worker:
 	# bypasses the issue during build. See notes/decisions.md ADR-010.
 	$(SSH) "cd $(REMOTE_REPO)/workers && docker build --network=host -t $(WORKER_IMAGE) ."
 
+.PHONY: build-orchestrator
+build-orchestrator:
+	$(SSH) "cd $(REMOTE_REPO)/orchestrator && docker build --network=host -t $(ORCHESTRATOR_IMAGE) ."
+
+.PHONY: build-ui
+build-ui:
+	$(SSH) "cd $(REMOTE_REPO)/ui && docker build --network=host -t $(UI_IMAGE) ."
+
 # ---- lifecycle -------------------------------------------------------------
-# WORKER_IMAGE is exported so the topology YAML's \${WORKER_IMAGE} resolves.
+# All *_IMAGE vars are exported via $(CLAB_ENV) so the topology YAML's
+# ${WORKER_IMAGE} / ${ORCHESTRATOR_IMAGE} / ${UI_IMAGE} substitutions resolve.
 .PHONY: up
 up:
-	$(RUN) WORKER_IMAGE=$(WORKER_IMAGE) containerlab deploy -t $(TOPO)
+	$(RUN) $(CLAB_ENV) containerlab deploy -t $(TOPO)
 
 .PHONY: down
 down:
-	$(RUN) WORKER_IMAGE=$(WORKER_IMAGE) containerlab destroy -t $(TOPO) --cleanup
+	$(RUN) $(CLAB_ENV) containerlab destroy -t $(TOPO) --cleanup
 
 .PHONY: reload
 reload: down up
@@ -211,67 +236,18 @@ warm: up
 # ============================================================================
 # UI (Phase 2)
 #
-# Backend (FastAPI) + Frontend (Next.js) both run on the remote so anything on
-# the home network can reach them at http://$(REMOTE_IP):{8000,3000}.
+# Orchestrator (FastAPI :8000) and UI (Next.js :3000) run as containers
+# deployed by containerlab alongside the lab fabric. `make up` brings them up
+# along with everything else.
 # ============================================================================
 
-UI_LOG_DIR  := /tmp/aidc-ui
-UI_BACK_LOG := $(UI_LOG_DIR)/backend.log
-UI_FRONT_LOG:= $(UI_LOG_DIR)/frontend.log
-UI_BACK_PID := $(UI_LOG_DIR)/backend.pid
-UI_FRONT_PID:= $(UI_LOG_DIR)/frontend.pid
+.PHONY: logs-orchestrator
+logs-orchestrator:
+	$(SSH) "docker logs --tail 50 orchestrator 2>&1"
 
-.PHONY: ui-deps
-ui-deps:
-	$(SSH) "mkdir -p $(UI_LOG_DIR)"
-	$(SSH) "cd $(REMOTE_REPO)/orchestrator && [ -d .venv ] || python3 -m venv .venv && .venv/bin/pip install --upgrade pip -q && .venv/bin/pip install -q -r requirements.txt"
-	$(SSH) "cd $(REMOTE_REPO)/ui && pnpm install"
-
-.PHONY: ui-backend
-ui-backend:
-	$(SSH) "mkdir -p $(UI_LOG_DIR)"
-	@echo "Starting FastAPI backend on $(REMOTE_HOST):8000 ..."
-	$(SSH) "cd $(REMOTE_REPO)/orchestrator && nohup .venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000 --log-level info >$(UI_BACK_LOG) 2>&1 & echo \$$! >$(UI_BACK_PID); disown"
-	@echo "  URL: http://$(REMOTE_IP):8000/api/health"
-
-.PHONY: ui-frontend
-ui-frontend:
-	$(SSH) "mkdir -p $(UI_LOG_DIR)"
-	@echo "Starting Next.js dev server on $(REMOTE_HOST):3000 ..."
-	# In LOCAL mode we don't pin NEXT_PUBLIC_AIDC_API_BASE — the frontend then
-	# auto-resolves the API host via window.location.hostname, which keeps it
-	# working whether you browse from this box (localhost) or from another
-	# machine on your LAN (using this box's IP).
-	$(SSH) "cd $(REMOTE_REPO)/ui && $(if $(filter 1,$(LOCAL)),,NEXT_PUBLIC_AIDC_API_BASE='http://$(REMOTE_IP):8000') nohup pnpm dev >$(UI_FRONT_LOG) 2>&1 & echo \$$! >$(UI_FRONT_PID); disown"
-	@echo "  URL: http://$(REMOTE_IP):3000"
-
-.PHONY: ui
-ui: ui-backend ui-frontend
-	@echo ""
-	@echo "AIDC Lab UI is starting up on $(REMOTE_HOST)."
-	@echo "  Backend : http://$(REMOTE_IP):8000/api/devices"
-	@echo "  Frontend: http://$(REMOTE_IP):3000"
-	@echo ""
-	@echo "Give Next.js ~10s to compile the first time, then open the URL in your browser."
-
-.PHONY: ui-stop
-ui-stop:
-	@echo "Stopping UI processes on $(REMOTE_HOST) ..."
-	-@$(SSH) "[ -f $(UI_BACK_PID) ]  && kill \$$(cat $(UI_BACK_PID))  2>/dev/null; true"
-	-@$(SSH) "[ -f $(UI_FRONT_PID) ] && kill \$$(cat $(UI_FRONT_PID)) 2>/dev/null; true"
-	# Belt-and-suspenders: pnpm forks a worker (`next-server`) that survives
-	# killing the `pnpm dev` parent. Reap all related processes by name.
-	-@$(SSH) "pkill -9 -f 'uvicorn api.main' 2>/dev/null; pkill -9 -f 'pnpm dev' 2>/dev/null; pkill -9 -f 'next-server' 2>/dev/null; pkill -9 -f 'next dev' 2>/dev/null; rm -f $(UI_BACK_PID) $(UI_FRONT_PID); true"
-
-.PHONY: ui-logs
-ui-logs:
-	@echo "=== backend ===" ; $(SSH) "tail -n 20 $(UI_BACK_LOG)  2>/dev/null" || echo "no backend log yet"
-	@echo "=== frontend ===" ; $(SSH) "tail -n 20 $(UI_FRONT_LOG) 2>/dev/null" || echo "no frontend log yet"
-
-# End-to-end smoke: connects to the WebSocket console, runs a vtysh BGP query on leaf1.
-.PHONY: ui-smoke
-ui-smoke:
-	$(SSH) "cd $(REMOTE_REPO)/orchestrator && .venv/bin/python tests/ws_smoke.py leaf1 \"vtysh -c 'show ip bgp summary' | head -8\""
+.PHONY: logs-ui
+logs-ui:
+	$(SSH) "docker logs --tail 50 ui 2>&1"
 
 # ============================================================================
 # Lab guide (docs/lab-guide/) — exercise / solve / status

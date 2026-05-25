@@ -122,9 +122,20 @@ def list_devices():
 
 # ---- labs registry ----------------------------------------------------------
 # Lab content lives under <repo>/docs/lab-guide/*.md and is referenced from the
-# registry by paths relative to the repo root. Repo root is two parents up from
-# this file (orchestrator/api/main.py -> orchestrator/api -> orchestrator -> repo).
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# registry by paths relative to the repo root.
+#
+# Two deployment modes:
+#   1. Container (default in production): the host repo is bind-mounted at /repo
+#      and AIDC_REPO_ROOT=/repo is set in the container env.
+#   2. Host process (legacy / tests): no env var; fall back to walking up from
+#      this file (orchestrator/api/main.py -> orchestrator/api -> orchestrator
+#      -> repo).
+REPO_ROOT = Path(
+    os.environ.get(
+        "AIDC_REPO_ROOT",
+        str(Path(__file__).resolve().parent.parent.parent),
+    )
+)
 LABS_REGISTRY_PATH = Path(__file__).resolve().parent / "labs.json"
 LAB_CONTENT_PARTS = {"exercise", "solution", "overview"}
 
