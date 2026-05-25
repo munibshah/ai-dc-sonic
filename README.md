@@ -174,6 +174,25 @@ If you want to access the UI from another machine on the LAN, the Next.js dev se
 
 Successful `warm` ends with all 56 worker-pair pings passing and BGP up on every switch.
 
+### Skipping the worker image build (use a pre-built image instead)
+
+The `aidc/worker:latest` image is built locally by `make pull` from `workers/Dockerfile` — that's a ~2-3 minute first-run hit, and it requires the box to have working DNS + pip + apt mirrors during `docker build`.
+
+If you'd rather pull a pre-built multi-arch worker image from a registry, set `WORKER_IMAGE` to that tag and `make pull` will pull it instead of building:
+
+```bash
+make WORKER_IMAGE=munibshah/aidc-worker:latest LOCAL=1 pull
+make WORKER_IMAGE=munibshah/aidc-worker:latest LOCAL=1 warm
+```
+
+To publish your own pre-built image (so someone else can skip the build), `docker login` first, then:
+
+```bash
+make publish-worker WORKER_IMAGE=<your-dockerhub-user>/aidc-worker:latest
+```
+
+That runs a `docker buildx` multi-arch build (`linux/amd64` + `linux/arm64` by default — override with `PUBLISH_PLATFORMS=...`) and pushes both manifests under one tag.
+
 ### Web UI (Phase 2)
 
 ```bash

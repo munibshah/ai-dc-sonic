@@ -40,7 +40,12 @@ topology:
         - ../configs/frr/vtysh.conf:/etc/frr/vtysh.conf:ro
         - ../configs/frr/bootstrap-switch.sh:/usr/local/bin/bootstrap-switch.sh:ro
     linux:
-      image: aidc/worker:latest
+      # Worker image — read from $WORKER_IMAGE so the same topology works whether
+      # you build the image locally (default: aidc/worker:latest, built by
+      # `make build-worker` from workers/Dockerfile) or pull a pre-built one
+      # from a registry (e.g. WORKER_IMAGE=munibshah/aidc-worker:latest).
+      # The Makefile always exports WORKER_IMAGE before invoking containerlab.
+      image: ${WORKER_IMAGE}
 
   nodes:
     # ---- spines ----

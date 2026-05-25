@@ -23,9 +23,9 @@ ifeq ($(LOCAL),1)
 else
   # Default: SSH into a remote Linux box and run things there.
   REMOTE_HOST ?= aidc-remote
-  REMOTE_REPO ?= /home/eveng/aidc-lab
-  REMOTE_IP   ?= 192.168.1.26
-  REMOTE_USER ?= eveng
+  REMOTE_REPO ?= /home/aidc-sonic/ai-dc-sonic
+  REMOTE_IP   ?= 192.168.1.29
+  REMOTE_USER ?= aidc-sonic
   SSH         := ssh $(REMOTE_HOST)
   SSH_TTY     := ssh -t $(REMOTE_HOST)
   RUN         := $(SSH) "cd $(REMOTE_REPO) &&"
@@ -38,6 +38,13 @@ LAB_NAME := aidc
 WORKERS  := gpu1 gpu2 gpu3 gpu4 gpu5 gpu6 gpu7 gpu8
 LEAVES   := leaf1 leaf2 leaf3 leaf4
 SPINES   := spine1 spine2
+
+# Worker container image. Defaults to the local build tag (aidc/worker:latest);
+# override to point at a registry-hosted multi-arch image and skip the local
+# build:  make WORKER_IMAGE=munibshah/aidc-worker:latest LOCAL=1 warm
+WORKER_IMAGE      ?= aidc/worker:latest
+# Platforms `make publish-worker` builds for (override if you only need one).
+PUBLISH_PLATFORMS ?= linux/amd64,linux/arm64
 
 # ---- help ------------------------------------------------------------------
 .PHONY: help
@@ -106,26 +113,55 @@ sync:
 endif
 
 # ---- pull / build ----------------------------------------------------------
+# `make pull` brings the sonic-vs base image down, then either builds the
+# worker image locally (if WORKER_IMAGE is the default local-build tag) or
+# pulls the worker image from its registry (if WORKER_IMAGE is overridden).
 .PHONY: pull
 pull:
 	$(RUN) docker pull netreplica/docker-sonic-vs:latest
-	$(MAKE) build-worker
+	@if [ "$(WORKER_IMAGE)" = "aidc/worker:latest" ]; then \
+	  echo "WORKER_IMAGE=$(WORKER_IMAGE) — building locally."; \
+	  $(MAKE) build-worker; \
+	else \
+	  echo "WORKER_IMAGE=$(WORKER_IMAGE) — pulling from registry."; \
+	  $(RUN) docker pull $(WORKER_IMAGE); \
+	fi
 
 .PHONY: build-worker
 build-worker:
 	# --network=host : on this remote, the default docker bridge can't egress
 	# DNS/HTTP cleanly (Tailscale interferes with bridge NAT). Host networking
 	# bypasses the issue during build. See notes/decisions.md ADR-010.
-	$(SSH) "cd $(REMOTE_REPO)/workers && docker build --network=host -t aidc/worker:latest ."
+	$(SSH) "cd $(REMOTE_REPO)/workers && docker build --network=host -t $(WORKER_IMAGE) ."
+
+# Multi-arch build + push to a registry. You must `docker login` first.
+# Requires a buildx-capable docker (default since 20.10). Override WORKER_IMAGE
+# to your own namespace, e.g.:
+#   make publish-worker WORKER_IMAGE=munibshah/aidc-worker:latest
+.PHONY: publish-worker
+publish-worker:
+	@if [ "$(WORKER_IMAGE)" = "aidc/worker:latest" ]; then \
+	  echo "ERROR: WORKER_IMAGE is still the local-build default."; \
+	  echo "Set it to your registry tag, e.g.:"; \
+	  echo "  make publish-worker WORKER_IMAGE=<dockerhub-user>/aidc-worker:latest"; \
+	  exit 1; \
+	fi
+	@echo "Publishing $(WORKER_IMAGE) for $(PUBLISH_PLATFORMS)..."
+	$(SSH) "cd $(REMOTE_REPO)/workers && \
+	  (docker buildx use aidc-builder 2>/dev/null || docker buildx create --use --name aidc-builder) && \
+	  docker buildx build --platform $(PUBLISH_PLATFORMS) -t $(WORKER_IMAGE) --push ."
+	@echo "Pushed $(WORKER_IMAGE). Anyone can now skip the local build with:"
+	@echo "  make WORKER_IMAGE=$(WORKER_IMAGE) LOCAL=1 warm"
 
 # ---- lifecycle -------------------------------------------------------------
+# WORKER_IMAGE is exported so the topology YAML's \${WORKER_IMAGE} resolves.
 .PHONY: up
 up:
-	$(RUN) containerlab deploy -t $(TOPO)
+	$(RUN) WORKER_IMAGE=$(WORKER_IMAGE) containerlab deploy -t $(TOPO)
 
 .PHONY: down
 down:
-	$(RUN) containerlab destroy -t $(TOPO) --cleanup
+	$(RUN) WORKER_IMAGE=$(WORKER_IMAGE) containerlab destroy -t $(TOPO) --cleanup
 
 .PHONY: reload
 reload: down up
