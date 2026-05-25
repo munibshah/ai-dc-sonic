@@ -174,24 +174,21 @@ If you want to access the UI from another machine on the LAN, the Next.js dev se
 
 Successful `warm` ends with all 56 worker-pair pings passing and BGP up on every switch.
 
-### Skipping the worker image build (use a pre-built image instead)
+### About the worker image
 
-The `aidc/worker:latest` image is built locally by `make pull` from `workers/Dockerfile` — that's a ~2-3 minute first-run hit, and it requires the box to have working DNS + pip + apt mirrors during `docker build`.
+`make pull` brings down two images:
 
-If you'd rather pull a pre-built multi-arch worker image from a registry, set `WORKER_IMAGE` to that tag and `make pull` will pull it instead of building:
+- `netreplica/docker-sonic-vs:latest` — the SONiC NOS image (upstream, ~270 MB).
+- `munibshah/aidc-worker:latest` — the GPU-worker image (multi-arch amd64/arm64, ~1.5 GB), maintained by this repo's admin. Built from [`workers/Dockerfile`](workers/Dockerfile).
 
-```bash
-make WORKER_IMAGE=munibshah/aidc-worker:latest LOCAL=1 pull
-make WORKER_IMAGE=munibshah/aidc-worker:latest LOCAL=1 warm
-```
+You don't need to build either one — both are just `docker pull`s. The default is set in the Makefile (`WORKER_IMAGE := munibshah/aidc-worker:latest`); override it with `make WORKER_IMAGE=... pull` if you maintain your own fork.
 
-To publish your own pre-built image (so someone else can skip the build), `docker login` first, then:
+If you're hacking on the worker `Dockerfile` and want to run with your local changes instead of the published image:
 
 ```bash
-make publish-worker WORKER_IMAGE=<your-dockerhub-user>/aidc-worker:latest
+make WORKER_IMAGE=aidc/worker:latest build-worker
+make WORKER_IMAGE=aidc/worker:latest LOCAL=1 warm
 ```
-
-That runs a `docker buildx` multi-arch build (`linux/amd64` + `linux/arm64` by default — override with `PUBLISH_PLATFORMS=...`) and pushes both manifests under one tag.
 
 ### Web UI (Phase 2)
 
