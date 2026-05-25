@@ -73,12 +73,33 @@ The lab user does **not** need root sudo for day-to-day operation — just membe
 
 ```bash
 # On the box that will run the lab (remote or local), once:
-curl -fsSL https://get.docker.com | sudo sh
+
+# (a) Prereqs the rest of this block assumes are present. A minimal Ubuntu
+#     install doesn't ship with curl/git, and the installer scripts below
+#     will fail silently without them.
+sudo apt-get update
+sudo apt-get install -y curl git ca-certificates
+
+# (b) Docker. Distro-packaged docker.io is the most reliable path on Ubuntu;
+#     use it unless you specifically need a newer Docker CE.
+sudo apt-get install -y docker.io
 sudo usermod -aG docker $USER
-bash -c "$(curl -sL https://get.containerlab.dev)"   # adds you to clab_admins
-sudo apt-get install -y python3-venv python3-pip
-sudo npm install -g pnpm@9                            # for the UI (Phase 2)
-# Log out and back in so the group changes take effect.
+#     Alternative: official Docker CE from get.docker.com
+#       curl -fsSL https://get.docker.com | sudo sh
+#     Do NOT use 'snap install docker' — its sandboxing breaks containerlab's
+#     veth + bind-mount setup.
+
+# (c) Containerlab (uses curl + sudo; will add you to the clab_admins group):
+bash -c "$(curl -sL https://get.containerlab.dev)"
+
+# (d) Python + Node toolchain for the UI (Phase 2):
+sudo apt-get install -y python3-venv python3-pip nodejs npm
+sudo npm install -g pnpm@9
+
+# Log out and back in (or `newgrp docker && newgrp clab_admins`) so the
+# group changes take effect, then check:
+docker ps                  # should print an empty table, not "permission denied"
+containerlab version
 ```
 
 ### 2. Clone the repo
