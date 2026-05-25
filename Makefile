@@ -66,7 +66,12 @@ help:
 sync:
 	@echo "rsync -> $(REMOTE_HOST):$(REMOTE_REPO)"
 	@$(SSH) "mkdir -p $(REMOTE_REPO)"
-	@rsync -az --delete \
+	# --inplace: write to the same inode rather than rename(temp -> target).
+	# Required because Docker bind-mounts files BY INODE — rename would leave
+	# the container still attached to the old inode (= old content), even after
+	# the host file is updated. With --inplace, the container sees the new
+	# content immediately.
+	@rsync -az --inplace --no-whole-file --delete \
 	  --exclude='.git/' \
 	  --exclude='ui/node_modules/' \
 	  --exclude='ui/.next/' \
