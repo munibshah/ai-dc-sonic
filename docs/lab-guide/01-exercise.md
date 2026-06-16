@@ -4,9 +4,9 @@
 
 ## Scenario
 
-You're the network engineer. Six switches were just racked into the lab — `spine1`, `spine2`, `leaf1`, `leaf2`, `leaf3`, `leaf4`. Eight GPU workers (`gpu1`..`gpu8`) are wired in but waiting on the fabric. The switches have no L3 config and no BGP. Your job: bring the fabric up through the UI consoles, watch BGP sessions establish in real time, and end with `gpu1` able to ping `gpu7` over **two parallel paths** (one via spine1, one via spine2).
+You're the network engineer. Six switches were just racked into the lab — `spine1`, `spine2`, `leaf1`, `leaf2`, `leaf3`, `leaf4`. Eight GPU workers (`gpu1`..`gpu8`) are wired in but waiting on the fabric. The switches have no L3 config and no BGP. Your job: bring the fabric up through the in-UI consoles, watch BGP sessions establish in real time, and end with `gpu1` able to ping `gpu7` over **two parallel paths** (one via spine1, one via spine2).
 
-You'll build in **end-to-end-first order**: spine1 → leaf1 (the first BGP session comes up!) → leaf2 → spine2 (now ECMP appears) → leaf3 → leaf4. Each step gives you something observable.
+You'll build in **end-to-end-first order**: spine1 → leaf1 (the first BGP session comes up!) → leaf2 → spine2 (now ECMP appears) → leaf3 → leaf4. Each step gives you something observable, and each step ends with a **Check** button so you get instant feedback before moving on.
 
 ### Why an AI Data Center needs this fabric
 
@@ -18,20 +18,15 @@ That's what you're going to build.
 
 ### Get to the starting line
 
-If you haven't already:
+Click **Start lab ▶** in the top bar. The orchestrator wipes every switch back to a bare-bones FRR config (no interfaces, no BGP) and reloads the daemons. Within ~10 seconds the lab status pill flips to `In progress` and you're ready. Click it again at any time to restart from scratch — your past work is just discarded.
 
-```bash
-make wipe          # if you skipped this earlier
-make lab-status    # expect 0 BGP peers + 8/56 OK pings (only same-leaf workers can talk)
-```
-
-Then open the UI: **http://192.168.1.26:3000/topology**
+Open the **Topology** button to see the fabric, or click **+** in the terminals pane to open a console for any device. Same six switches, same eight workers — but right now nothing is reachable across leaves.
 
 ---
 
 ## Step 1: Bring up `spine1`
 
-Click `spine1` in the topology view. The console pane on the right opens — you're now inside a bash shell on the spine1 container.
+Click **Topology** in the top bar, then click `spine1`. A new terminal tab opens — you're now inside a bash shell on the spine1 container.
 
 ### Discover what's there
 
@@ -106,6 +101,10 @@ do show interface brief
 ```
 
 Expected: a long table — `Bridge`, `Ethernet0..Ethernet124`, `dummy`, `eth0..eth4`, `lo`. The SONiC `EthernetN` rows are all `down` (they're physical port names the lab doesn't use — ignore them). The interesting rows are at the bottom: `eth1..eth4` all `up` with the IPs you just configured, `lo up 10.0.0.1/32`, `eth0` `up` with the mgmt IP.
+
+Run the checkpoint:
+
+<checkpoint name="spine1_underlay" label="Spine 1 underlay (lo + ethN IPs)" />
 
 ### Configure BGP
 
@@ -212,27 +211,13 @@ Neighbor        V         AS    MsgRcvd    MsgSent   ...  State/PfxRcd
 
 All four leaves show `Active` (or `Connect`). That's correct — the leaves haven't been configured yet, so the TCP connection can't establish.
 
-### Try to ping a neighbor
-
-```
-exit
-```
-
-(out of vtysh, back at the bash shell)
-
-```sh
-ping -c 2 10.1.1.1
-```
-
-Expected: 100% loss. leaf1 has no IP on its eth1 yet.
-
 > 💡 **What you've built**: Spine1 has L3 ports, BGP configured with four leaf-peer slots, and is waiting. Zero peers up = zero routes flowing. This is exactly what a freshly-configured spine looks like the moment it's wired in: it knows what it *should* peer with, it's listening, nothing is responding. Time to bring up a leaf.
 
 ---
 
 ## Step 2: Bring up `leaf1` — and watch the first BGP session establish
 
-Click `leaf1` in the UI topology. New console opens.
+Back in **Topology**, click `leaf1`. New terminal tab opens.
 
 ### Discover
 
@@ -342,6 +327,8 @@ spine1(10.1.1.0)  4      65000   ...   1
 
 **Spine1 is Established!** Notice the `spine1(...)` label — that's the `neighbor X description spine1` line you set, surfaced once the session comes up. PfxRcd=1 means spine1 advertised exactly one prefix to leaf1 so far (spine1's own loopback `10.0.0.1/32`). Spine2 is still `Active` because we haven't configured it yet.
 
+<checkpoint name="leaf1_to_spine1" label="Leaf 1 ↔ Spine 1 BGP session" />
+
 ### Look at routes
 
 ```
@@ -370,7 +357,7 @@ Expected: success. Even though the loopback `10.0.0.1` isn't on any direct link,
 
 ### Ping leaf1 from a GPU
 
-Open the **gpu1** console in the UI.
+Open the **gpu1** console (Topology → gpu1).
 
 ```sh
 ping -c 2 10.0.1.1     # leaf1's loopback
@@ -384,7 +371,7 @@ Expected: success. gpu1's default route is `10.2.1.0` (leaf1's eth3). Leaf1 has 
 
 ## Step 3: Bring up `leaf2`
 
-Click `leaf2` in the UI. Same pattern as leaf1, with leaf2's numbers from [`../topology.md`](../topology.md) §3.
+Open the `leaf2` console. Same pattern as leaf1, with leaf2's numbers from [`../topology.md`](../topology.md) §3.
 
 ```sh
 vtysh
@@ -465,13 +452,15 @@ ping -c 2 10.2.2.1     # gpu3, attached to leaf2
 
 Expected: success. The traffic goes `gpu1 → leaf1 → spine1 → leaf2 → gpu3`. **First cross-leaf flow.**
 
+<checkpoint name="cross_leaf_via_spine1" label="Cross-leaf reachability (gpu1 ↔ gpu3)" />
+
 > 💡 **Important**: this works through *one* spine. spine2 isn't up yet, so there's no ECMP. A traceroute would show exactly one path. In a real AllReduce workload right now, every gradient byte between leaf1 and leaf2 would serialize on spine1 — and if spine1 fails, the entire training job stalls. This is why we need spine2.
 
 ---
 
 ## Step 4: Bring up `spine2` — and watch ECMP arrive
 
-Click `spine2` in the UI. Same pattern as spine1, but with the `10.1.2.*` block and router-id `10.0.0.2`.
+Open the `spine2` console. Same pattern as spine1, but with the `10.1.2.*` block and router-id `10.0.0.2`.
 
 ```sh
 vtysh
@@ -546,6 +535,8 @@ Routing entry for 10.0.1.2/32
 
 That's ECMP. Two parallel paths to leaf2's loopback — one via spine1, one via spine2. (If you'd rather see the compact form, `show ip route bgp` gives the familiar `B>* 10.0.1.2/32 [20/0] via 10.1.1.0, eth1 / via 10.1.2.0, eth2` format.)
 
+<checkpoint name="spine2_ecmp" label="ECMP — Leaf 1 has 2 paths to Leaf 2" />
+
 > 💡 **ECMP is now live, and this is *the* foundational primitive of AI DC fabrics**. AllReduce splits gradient updates into many concurrent flows; with ECMP, each flow hashes (typically on the 5-tuple) to one of the available spines, so the aggregate bandwidth between any two leaves = N × spine_bw, not 1 × spine_bw. With single-path routing, you'd serialize all gradient sync on one spine, and the training step would stall waiting for that one bottleneck. ECMP + `multipath-relax` + `maximum-paths` are the three settings that make this possible — miss any one and ECMP silently doesn't work.
 
 Try the cross-leaf ping again from gpu1 — still works, and now it's redundant.
@@ -564,7 +555,7 @@ Same pattern. Numbers from [`../topology.md`](../topology.md) §3, leaf3 row:
 - eth4 (to gpu6): `10.2.3.2/31`
 - network statements: 4 lines (loopback + VTEP + 2 worker /31s)
 
-Full vtysh sequence in [`02-solution.md`](02-solution.md) §5.
+Full vtysh sequence in [`02-solution.md`](02-solution.md) §5 (or click **Reveal solution** in the top bar).
 
 ---
 
@@ -579,25 +570,23 @@ Full vtysh sequence in [`02-solution.md`](02-solution.md) §5.
 
 Full vtysh sequence in [`02-solution.md`](02-solution.md) §6.
 
+Once both leaves are up:
+
+<checkpoint name="all_leaves_established" label="Leaf 3 and Leaf 4 fully peered" />
+
 ---
 
 ## End-to-end verification
 
-### From any GPU
-
-Open **gpu1** console, then:
+Open the **gpu1** console and spot-check a worker on the far side of the fabric:
 
 ```sh
-for ip in 10.2.1.3 10.2.2.1 10.2.2.3 10.2.3.1 10.2.3.3 10.2.4.1 10.2.4.3; do
-  ping -c 1 -W 1 $ip && echo OK || echo FAIL
-done
+ping -c 2 10.2.4.3       # gpu8, attached to leaf4
 ```
 
-Expected: all 7 OK.
+Expected: success. Traffic hashes across both spines.
 
-### ECMP across the fabric
-
-Open **leaf1** console:
+Look at ECMP from any leaf:
 
 ```sh
 vtysh -c "show ip route 10.0.1.3"
@@ -605,14 +594,15 @@ vtysh -c "show ip route 10.0.1.3"
 
 Expected: 2 next-hops (one via spine1, one via spine2).
 
-### From your laptop
+Then run the full check suite — click **Submit ✓** in the top bar. The orchestrator will:
 
-```bash
-make ping-mesh    # expect: 56/56 OK
-make lab-status   # expect: clean BGP table + 56 / 56 pings OK
-```
+1. Re-run every step-level checkpoint above.
+2. Run a pairwise 56-ping mesh across all 8 workers.
+3. Show you a per-check pass/fail card right below this guide.
 
-The UI at http://192.168.1.26:3000/topology should show all nodes green.
+If everything passes, the lab stamps as **Passed**, a completion screen appears with your timing stats, and a CTA appears for Lab 2.
+
+If something fails, the card shows you exactly which check failed and why. Fix it, then click **Submit ✓** again (it's idempotent — your attempts counter just ticks up).
 
 ---
 
@@ -620,13 +610,13 @@ The UI at http://192.168.1.26:3000/topology should show all nodes green.
 
 This is what convinces you that fast timers + ECMP actually matter.
 
-On **spine1** console:
+On the **spine1** console:
 
 ```sh
 ip link set eth3 down    # cut the spine1 ↔ leaf3 link
 ```
 
-On **leaf3** console:
+On the **leaf3** console:
 
 ```sh
 vtysh -c "show ip bgp summary"
@@ -634,7 +624,7 @@ vtysh -c "show ip bgp summary"
 
 Within ~9 seconds (timers 3 9 — hold timer expired), the spine1 peer (`10.1.1.4`) should be `Idle` or `Active`.
 
-From **gpu5** (attached to leaf3):
+From the **gpu5** console (gpu5 is attached to leaf3):
 
 ```sh
 ping -c 5 10.2.1.1     # gpu1 (under leaf1)
@@ -655,36 +645,16 @@ Within seconds, BGP re-establishes on leaf3 and ECMP returns.
 
 ---
 
-## Saving your work
+## Stuck? Want to restart?
 
-Your vtysh changes are **in the running daemons only**. They'll be lost if the container restarts. To persist:
+| You want to… | Click |
+|---|---|
+| See the canonical answer for any step | **Reveal solution** in the top bar |
+| Push the canonical config into the live fabric (no need to type vtysh) | **Solve** in the top bar (your run will be flagged "solved") |
+| Wipe everything back to a bare fabric and try again | **Reset** in the top bar (or **Start lab ▶** if you've never started) |
+| Run all checks now | **Submit ✓** in the top bar |
 
-**Option A — Adopt the canonical config**:
-
-```bash
-make solve
-```
-
-This `git checkout`s the committed `configs/frr/<node>/frr.conf` files (which already contain a working configuration equivalent to what you just built), rsyncs them to the remote, and reloads FRR. Your work is replaced with the canonical version.
-
-**Option B — Save your own work**:
-
-Open `configs/frr/<switch>/frr.conf` on your laptop, transcribe the vtysh commands you ran into FRR config-file format (the appendix in [`02-solution.md`](02-solution.md) shows the mapping — it's mostly the same syntax), then:
-
-```bash
-make sync
-make fabric-bootstrap
-```
-
-Now your edits survive container restarts.
-
-**Option C — Start over**:
-
-```bash
-make wipe
-```
-
-Blank slate. Try again.
+> Your vtysh edits live in the running FRR daemons. They don't persist across a switch container restart — but the orchestrator never restarts switch containers, so you can safely walk away. Just close the browser; when you come back, your session resumes where you left it.
 
 ---
 

@@ -1,0 +1,46 @@
+# Cloudflare Tunnel ingress for the AIDC lab host.
+#
+# Exposes the self-hosted lab on public HTTPS hostnames with no port-forwarding,
+# firewall rules, or public IP. Put Cloudflare Access in front of `lab.` and
+# `book.` (and optionally `grafana.`) for login + identity.
+#
+# Setup (run on the lab host, once):
+#   cloudflared tunnel login
+#   cloudflared tunnel create aidc
+#   # -> writes credentials to ~/.cloudflared/<TUNNEL_ID>.json  (DO NOT COMMIT)
+#   cloudflared tunnel route dns aidc lab.<domain>
+#   cloudflared tunnel route dns aidc api.<domain>
+#   cloudflared tunnel route dns aidc grafana.<domain>
+#   # then run with this config:
+#   cloudflared tunnel --config cloudflare/tunnel/config.yml run
+#
+# Replace <TUNNEL_ID>, the credentials path, and <domain> below.
+
+tunnel: e1a3a19b-ed85-49bf-b88a-e59d22107b68
+credentials-file: /home/aidc-sonic/.cloudflared/e1a3a19b-ed85-49bf-b88a-e59d22107b68.json
+
+ingress:
+  # Single-hostname topology: the UI, the orchestrator API, and the booking
+  # Worker all live under lab.munibshah.com so one Cloudflare Access login
+  # covers everything and identity flows same-origin. Order matters — the more
+  # specific path rule must come before the catch-all UI rule.
+  #
+  # NOTE: /booking-api/* is served by the booking Worker via a Workers Route at
+  # the edge (see booking/wrangler.jsonc), so it never reaches this tunnel.
+
+  # Orchestrator API + console WebSocket + metrics. Access injects the
+  # Cf-Access-Authenticated-User-Email header the booking gate reads.
+  - hostname: lab.munibshah.com
+    path: ^/(api|ws|metrics)(/.*)?$
+    service: http://localhost:8000
+
+  # Everything else on lab. -> the Next.js UI.
+  - hostname: lab.munibshah.com
+    service: http://localhost:3000
+
+  # Grafana telemetry dashboards (Lab 4+) — its own hostname (iframed).
+  - hostname: grafana.munibshah.com
+    service: http://localhost:3001
+
+  # Required catch-all.
+  - service: http_status:404

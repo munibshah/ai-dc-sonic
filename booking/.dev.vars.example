@@ -1,0 +1,6 @@
+# Copy to `.dev.vars` for local `wrangler dev`. The real secret in production is
+# set with `wrangler secret put ORCH_SHARED_SECRET` (never committed).
+#
+# Must match the orchestrator's AIDC_BOOKING_SECRET so GET /api/holder/current
+# accepts the orchestrator's server-to-server calls.
+ORCH_SHARED_SECRET="dev-shared-secret-change-me"

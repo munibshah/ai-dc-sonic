@@ -15,7 +15,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
-    AIDC_REPO_ROOT=/repo
+    AIDC_REPO_ROOT=/repo \
+    AIDC_DB_PATH=/data/aidc.db
 
 # Install the docker CLI. The container talks to the host docker daemon via
 # the bind-mounted socket, but it still needs the `docker` command on its
@@ -43,6 +44,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # under docs/lab-guide/ is bind-mounted at runtime so content can be edited
 # without rebuilding.
 COPY api/ api/
+
+# Persistent state lives here; topology mounts a host bind so the SQLite DB
+# (lab progress, session cookies, audit events) survives container restarts.
+RUN mkdir -p /data
+VOLUME ["/data"]
 
 EXPOSE 8000
 

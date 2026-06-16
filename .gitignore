@@ -3,6 +3,9 @@ clab-aidc/
 *.bak
 *.log
 
+# Orchestrator runtime state (SQLite, lab progress)
+.aidc-orchestrator-data/
+
 # Worker image build artifacts
 workers/.cache/
 
@@ -25,6 +28,18 @@ venv/
 node_modules/
 .next/
 ui/out/
+
+# Cloudflare booking Worker — local secrets
+booking/.dev.vars
+.wrangler/
+
+# Cloudflare Tunnel credentials (per-host, never commit)
+cloudflare/tunnel/*.json
+*.cloudflared.json
+
+# Orchestrator <-> Worker shared secrets (generated locally)
+cloudflare/.orch-secret
+cloudflare/.auth-secret
 
 # OS
 .DS_Store

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { Lab, fetchLabs } from "@/lib/api";
 
@@ -27,15 +28,51 @@ export default function LabsIndex() {
   if (!labs) return <p className="text-white/60">Loading labs…</p>;
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-semibold">AI Data Center Labs</h1>
-        <p className="text-white/60 mt-2 max-w-2xl">
-          Hands-on labs on hyperscale AI fabrics. Each lab gives you a real CLOS
-          fabric of containerised switches you configure through an in-browser
-          console — with a guided walkthrough that explains the <em>why</em>
-          behind every design decision.
-        </p>
+    <div className="space-y-8">
+      <header className="relative overflow-hidden rounded-2xl border border-purple-500/20 bg-gradient-to-br from-[#0b0820] via-[#120a2e] to-[#1a0d3b] px-6 py-8 md:px-10 md:py-10">
+        <div
+          className="absolute inset-y-0 right-0 w-1/2 opacity-15 pointer-events-none bg-[radial-gradient(ellipse_at_right,_rgba(168,85,247,0.55),_transparent_60%)]"
+          aria-hidden
+        />
+        <div className="relative flex flex-col md:flex-row items-start md:items-center gap-6 md:gap-8">
+          <Image
+            src="/lion-logo.png"
+            alt="AI DC Training Course"
+            width={140}
+            height={140}
+            priority
+            className="theme-logo-dark rounded-xl ring-1 ring-purple-400/30 shadow-[0_0_40px_rgba(168,85,247,0.25)] shrink-0"
+          />
+          <Image
+            src="/lion-transparent.png"
+            alt="AI DC Training Course"
+            width={140}
+            height={140}
+            className="theme-logo-light rounded-xl ring-1 ring-purple-400/30 shadow-[0_0_40px_rgba(168,85,247,0.25)] shrink-0"
+          />
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-[0.22em] text-purple-300/80 mb-2">
+              AI DC Training Course
+            </div>
+            <h1 className="text-3xl md:text-4xl font-semibold text-white">
+              AI Data Center Labs
+            </h1>
+            <p className="text-white/70 mt-3 max-w-2xl leading-relaxed">
+              Hands-on labs on hyperscale AI fabrics. Each lab gives you a real
+              CLOS fabric of containerised switches you configure through an
+              in-browser console — with a guided walkthrough that explains the
+              <em> why</em> behind every design decision.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <a
+                href="/portal"
+                className="rounded-lg bg-purple-500/80 hover:bg-purple-500 px-4 py-2 text-sm font-medium text-white transition"
+              >
+                Book a slot or instructor-led training →
+              </a>
+            </div>
+          </div>
+        </div>
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -47,8 +84,25 @@ export default function LabsIndex() {
   );
 }
 
-function LabCard({ lab }: { lab: Lab }) {
+// Each lab gets a geometric illustration from the Vesper design system, chosen
+// to reinforce the lab's central concept. Reuse is intentional where the
+// metaphor fits — `horizons` reads as "layers above the baseline" for both
+// the overlay and super-spine labs; `sun` as "radiating outward" for both
+// the AllReduce and telemetry-streaming labs. Illustrations only paint in
+// Vesper mode (see `.vesper-only` in globals.css) since they're designed
+// for a cream ground.
+const LAB_ILLUSTRATION: Record<string, string> = {
+  "1": "/illustrations/network.svg",   // BGP underlay — spine+leaf graph
+  "2": "/illustrations/horizons.svg",  // overlay rides on underlay
+  "3": "/illustrations/sun.svg",       // collective ops radiating from every rank
+  "4": "/illustrations/sun.svg",       // telemetry streaming outward
+  "5": "/illustrations/horizons.svg",  // super spines — the layer above the pod
+  "6": "/illustrations/shield.svg",    // resilience under failure
+};
+
+export function LabCard({ lab }: { lab: Lab }) {
   const isActive = lab.status === "active";
+  const illustration = LAB_ILLUSTRATION[lab.id];
   const body = (
     <div
       className={`group relative h-full rounded-xl border p-5 transition-all ${
@@ -57,7 +111,23 @@ function LabCard({ lab }: { lab: Lab }) {
           : "border-white/10 bg-black/20 opacity-70 cursor-not-allowed"
       }`}
     >
-      <div className="flex items-center gap-2 mb-2">
+      {illustration && (
+        // Small corner accent — sits absolutely in the top-right of the
+        // card so it doesn't push text content down. Vesper-only because
+        // the SVGs are flat geometric on warm colors and would clash with
+        // the dark theme. `pointer-events-none` keeps the click target
+        // for the whole card unchanged.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={illustration}
+          alt=""
+          aria-hidden="true"
+          className="vesper-only absolute top-4 right-4 pointer-events-none"
+          style={{ height: 52, width: "auto", opacity: 0.85 }}
+        />
+      )}
+
+      <div className="flex items-center gap-2 mb-2 lab-card-clear-corner">
         <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/60 bg-white/5">
           Lab {lab.id}
         </span>
@@ -75,7 +145,7 @@ function LabCard({ lab }: { lab: Lab }) {
         )}
       </div>
 
-      <h3 className="text-lg font-semibold text-white mb-2">{lab.title}</h3>
+      <h3 className="text-lg font-semibold text-white mb-2 lab-card-clear-corner">{lab.title}</h3>
       <p className="text-sm text-white/70 leading-relaxed">{lab.summary}</p>
 
       {lab.learning_objectives && lab.learning_objectives.length > 0 && (

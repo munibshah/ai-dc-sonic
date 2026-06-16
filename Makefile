@@ -51,9 +51,32 @@ WORKER_IMAGE       ?= munibshah/aidc-worker:latest
 ORCHESTRATOR_IMAGE ?= munibshah/aidc-orchestrator:latest
 UI_IMAGE           ?= munibshah/aidc-ui:latest
 
+# Booking gate (off unless AIDC_BOOKING_ENFORCE=1). Override on the command line
+# or `export` them in your shell, e.g.
+#   export AIDC_BOOKING_ENFORCE=1 AIDC_BOOKING_URL=https://book.<domain> AIDC_BOOKING_SECRET=...
+# then `make warm` / `make redeploy-orchestrator`.
+AIDC_BOOKING_ENFORCE   ?=
+AIDC_BOOKING_URL       ?=
+AIDC_BOOKING_SECRET    ?=
+AIDC_BOOKING_FAIL_OPEN ?=
+# HMAC secret for verifying the aidc_auth session cookie (== Worker AUTH_SIGNING_SECRET).
+AIDC_AUTH_SECRET       ?=
+
+# Public base URLs baked into the UI image at build time (empty => host-relative
+# fallback for direct-IP / LOCAL use). For the Cloudflare single-hostname deploy:
+#   make NEXT_PUBLIC_AIDC_API_BASE=https://lab.munibshah.com \
+#        NEXT_PUBLIC_BOOKING_API_BASE=https://lab.munibshah.com/booking-api \
+#        redeploy-ui
+NEXT_PUBLIC_AIDC_API_BASE    ?=
+NEXT_PUBLIC_AIDC_WS_BASE     ?=
+NEXT_PUBLIC_BOOKING_API_BASE ?=
+
 # All env vars containerlab needs to substitute into topo/aidc.clab.yml.
 # Used as a prefix to every `containerlab ...` invocation.
-CLAB_ENV := WORKER_IMAGE=$(WORKER_IMAGE) ORCHESTRATOR_IMAGE=$(ORCHESTRATOR_IMAGE) UI_IMAGE=$(UI_IMAGE)
+CLAB_ENV := WORKER_IMAGE=$(WORKER_IMAGE) ORCHESTRATOR_IMAGE=$(ORCHESTRATOR_IMAGE) UI_IMAGE=$(UI_IMAGE) \
+  AIDC_BOOKING_ENFORCE=$(AIDC_BOOKING_ENFORCE) AIDC_BOOKING_URL=$(AIDC_BOOKING_URL) \
+  AIDC_BOOKING_SECRET=$(AIDC_BOOKING_SECRET) AIDC_BOOKING_FAIL_OPEN=$(AIDC_BOOKING_FAIL_OPEN) \
+  AIDC_AUTH_SECRET=$(AIDC_AUTH_SECRET)
 
 # ---- help ------------------------------------------------------------------
 .PHONY: help
@@ -83,10 +106,15 @@ help:
 	@echo "  make ssh               open an interactive ssh session to $(REMOTE_HOST)"
 	@echo "  open http://$(REMOTE_IP):3000   labs index (browser)"
 	@echo ""
-	@echo "  ---- Lab guide (docs/lab-guide/) ----"
-	@echo "  make wipe             blank the switch FRR configs (enter exercise mode)"
-	@echo "  make solve            restore working configs via 'git show' (exit exercise mode)"
-	@echo "  make lab-status       quick \"am I done?\" summary"
+	@echo "  ---- Booking + public access (Cloudflare) ----"
+	@echo "  make deploy-booking    deploy the booking Worker to Cloudflare"
+	@echo "  make booking-schema    apply the D1 schema (production)"
+	@echo "  make tunnel            run cloudflared on the lab host (public HTTPS)"
+	@echo ""
+	@echo "  ---- Operator / recovery (out-of-band; learners use the UI) ----"
+	@echo "  make wipe             blank the switch FRR configs  (= 'Start' in the UI)"
+	@echo "  make solve            restore canonical configs     (= 'Solve' in the UI)"
+	@echo "  make lab-status       quick \"am I done?\" summary    (= 'Submit' in the UI)"
 
 # ---- sync ------------------------------------------------------------------
 # Sync the laptop repo to the remote. Excludes generated artifacts.
@@ -108,10 +136,13 @@ sync:
 	  --exclude='.git/' \
 	  --exclude='ui/node_modules/' \
 	  --exclude='ui/.next/' \
+	  --exclude='booking/node_modules/' \
+	  --exclude='cloudflare/tunnel/*.json' \
 	  --exclude='orchestrator/.venv/' \
 	  --exclude='*.pyc' --exclude='__pycache__/' \
 	  --exclude='clab-*/' \
 	  --exclude='.DS_Store' \
+	  --exclude='.aidc-orchestrator-data/' \
 	  ./ $(REMOTE_HOST):$(REMOTE_REPO)/
 	@echo "synced."
 endif
@@ -122,8 +153,7 @@ endif
 # default) or pulls from the registry (if it's been overridden / left at the
 # Hub default).
 .PHONY: pull
-pull:
-	$(RUN) docker pull netreplica/docker-sonic-vs:latest
+pull: pull-sonic-vs
 	@if [ "$(WORKER_IMAGE)" = "aidc/worker:latest" ]; then \
 	  echo "WORKER_IMAGE=$(WORKER_IMAGE) — building locally."; \
 	  $(MAKE) build-worker; \
@@ -153,19 +183,97 @@ build-worker:
 	# bypasses the issue during build. See notes/decisions.md ADR-010.
 	$(SSH) "cd $(REMOTE_REPO)/workers && docker build --network=host -t $(WORKER_IMAGE) ."
 
+# Fetch + load the modern SONiC switch image (aidc/sonic-vs:202511) from the
+# SONiC project's official Azure CI release pipeline. The download URL rotates
+# as the pipeline rebuilds, so we always re-resolve it from sonic.software's
+# JSON catalog. Idempotent: skips the download entirely if the image is
+# already loaded.
+.PHONY: pull-sonic-vs
+pull-sonic-vs:
+	@$(SSH) ' \
+	  if docker image inspect aidc/sonic-vs:202511 >/dev/null 2>&1; then \
+	    echo "aidc/sonic-vs:202511 already loaded; skipping download."; \
+	  else \
+	    echo "Resolving current 202511 docker-sonic-vs.gz URL from sonic.software..."; \
+	    url=$$(curl -sf https://sonic.software/builds.json | python3 -c "import json,sys;print(json.load(sys.stdin)[\"202511\"][\"docker-sonic-vs.gz\"][\"url\"])") && \
+	    test -n "$$url" && \
+	    echo "Downloading docker-sonic-vs.gz (~200 MB)..." && \
+	    curl -sSL "$$url" -o /tmp/docker-sonic-vs-202511.gz && \
+	    echo "docker load + tag..." && \
+	    docker load < /tmp/docker-sonic-vs-202511.gz && \
+	    docker tag docker-sonic-vs:latest aidc/sonic-vs:202511 && \
+	    rm -f /tmp/docker-sonic-vs-202511.gz && \
+	    echo "aidc/sonic-vs:202511 ready."; \
+	  fi'
+
 .PHONY: build-orchestrator
 build-orchestrator:
 	$(SSH) "cd $(REMOTE_REPO)/orchestrator && docker build --network=host -t $(ORCHESTRATOR_IMAGE) ."
 
 .PHONY: build-ui
 build-ui:
-	$(SSH) "cd $(REMOTE_REPO)/ui && docker build --network=host -t $(UI_IMAGE) ."
+	$(SSH) "cd $(REMOTE_REPO)/ui && docker build --network=host \
+	  --build-arg NEXT_PUBLIC_AIDC_API_BASE='$(NEXT_PUBLIC_AIDC_API_BASE)' \
+	  --build-arg NEXT_PUBLIC_AIDC_WS_BASE='$(NEXT_PUBLIC_AIDC_WS_BASE)' \
+	  --build-arg NEXT_PUBLIC_BOOKING_API_BASE='$(NEXT_PUBLIC_BOOKING_API_BASE)' \
+	  -t $(UI_IMAGE) ."
+
+# Rebuild the UI image AND recreate the running container on it. Use this
+# when iterating on UI changes — `make sync && make redeploy-ui` is the
+# full edit-to-browser loop. `docker restart ui` would NOT pick up the new
+# image; the container is recreated so the new image actually attaches.
+# Other lab containers (switches, orchestrator, workers) are untouched.
+.PHONY: redeploy-ui
+redeploy-ui: build-ui
+	$(SSH) "docker rm -f ui >/dev/null 2>&1 || true; \
+	  docker run -d --name ui --hostname ui \
+	    --network aidc-mgmt --ip 172.20.20.6 \
+	    -p 3000:3000 \
+	    --label clab-node-name=ui --label clab-node-longname=ui \
+	    --label clab-node-group=control --label clab-node-kind=linux \
+	    --label clab-owner=$$(whoami) \
+	    --label clab-topo-file=$(REMOTE_REPO)/topo/aidc.clab.yml \
+	    --label containerlab=aidc \
+	    $(UI_IMAGE)"
+	@echo "ui redeployed on $(UI_IMAGE) — hard-refresh the browser (Cmd-Shift-R) to invalidate cached JS chunks"
+
+# Same idea for the orchestrator. Includes one extra step: the orchestrator
+# needs the host docker socket + several bind-mounts that the UI doesn't.
+.PHONY: redeploy-orchestrator
+redeploy-orchestrator: build-orchestrator
+	$(SSH) "docker rm -f orchestrator >/dev/null 2>&1 || true; \
+	  docker run -d --name orchestrator --hostname orchestrator \
+	    --network aidc-mgmt --ip 172.20.20.5 \
+	    -p 8000:8000 \
+	    -v /var/run/docker.sock:/var/run/docker.sock \
+	    -v $(REMOTE_REPO)/docs:/repo/docs:ro \
+	    -v $(REMOTE_REPO)/workers/scripts:/repo/workers/scripts:ro \
+	    -v $(REMOTE_REPO)/configs:/repo/configs \
+	    -v $(REMOTE_REPO)/.aidc-orchestrator-data:/data \
+	    -e AIDC_REPO_ROOT=/repo \
+	    -e AIDC_DB_PATH=/data/aidc.db \
+	    -e AIDC_BOOKING_ENFORCE=$(AIDC_BOOKING_ENFORCE) \
+	    -e AIDC_BOOKING_URL=$(AIDC_BOOKING_URL) \
+	    -e AIDC_BOOKING_SECRET=$(AIDC_BOOKING_SECRET) \
+	    -e AIDC_BOOKING_FAIL_OPEN=$(AIDC_BOOKING_FAIL_OPEN) \
+	    -e AIDC_AUTH_SECRET=$(AIDC_AUTH_SECRET) \
+	    --label clab-node-name=orchestrator --label clab-node-longname=orchestrator \
+	    --label clab-node-group=control --label clab-node-kind=linux \
+	    --label clab-owner=$$(whoami) \
+	    --label clab-topo-file=$(REMOTE_REPO)/topo/aidc.clab.yml \
+	    --label containerlab=aidc \
+	    $(ORCHESTRATOR_IMAGE)"
+	@echo "orchestrator redeployed on $(ORCHESTRATOR_IMAGE)"
 
 # ---- lifecycle -------------------------------------------------------------
 # All *_IMAGE vars are exported via $(CLAB_ENV) so the topology YAML's
 # ${WORKER_IMAGE} / ${ORCHESTRATOR_IMAGE} / ${UI_IMAGE} substitutions resolve.
 .PHONY: up
 up:
+	# Ensure host-side bind-mount targets exist before containerlab tries to
+	# stat them. .aidc-orchestrator-data holds the SQLite db; gitignored, so
+	# it doesn't materialize from `make sync` on a fresh remote.
+	$(RUN) mkdir -p $(REMOTE_REPO)/.aidc-orchestrator-data
 	$(RUN) $(CLAB_ENV) containerlab deploy -t $(TOPO)
 
 .PHONY: down
@@ -193,6 +301,23 @@ else
 ssh:
 	$(SSH)
 endif
+
+# ---- booking + public access (Cloudflare) ----------------------------------
+# The booking Worker deploys from THIS machine to Cloudflare (a cloud deploy,
+# not the lab host) — so it runs locally regardless of LOCAL/REMOTE mode.
+.PHONY: deploy-booking
+deploy-booking:
+	cd booking && npm install && npm run deploy
+
+.PHONY: booking-schema
+booking-schema:
+	cd booking && npm run schema:remote
+
+# The Tunnel runs ON the lab host (it dials out to Cloudflare). Start it there.
+# Configure cloudflare/tunnel/config.yml first (see comments in that file).
+.PHONY: tunnel
+tunnel:
+	$(SSH) "cd $(REMOTE_REPO) && cloudflared tunnel --config cloudflare/tunnel/config.yml run"
 
 # ---- bring-up: BGP + bootstrap + ping --------------------------------------
 .PHONY: fabric-bootstrap
@@ -251,6 +376,13 @@ logs-ui:
 
 # ============================================================================
 # Lab guide (docs/lab-guide/) — exercise / solve / status
+#
+# OPERATOR / RECOVERY ONLY. Learners drive the lab from the browser:
+#   • Start ▶  in the UI ≡ make wipe
+#   • Solve    in the UI ≡ make solve
+#   • Submit ✓ in the UI ≡ make lab-status (richer JSON output + persisted state)
+# Use these `make` targets only when the orchestrator is unreachable or you
+# need to bring the fabric back to a known state out-of-band.
 #
 # `wipe`   blanks the 6 switch frr.conf files (copies from configs/frr/_skeleton/)
 #          and re-applies, so the lab transitions to "no BGP anywhere" state.

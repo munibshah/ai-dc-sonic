@@ -54,7 +54,7 @@ export default function DevicesPage() {
   devices.forEach((d) => byGroup[d.group].push(d));
 
   return (
-    <div className="space-y-8">
+    <div className="mx-auto max-w-7xl space-y-8">
       <div>
         <h1 className="text-2xl font-semibold">Lab devices</h1>
         <p className="text-white/60 text-sm mt-1">
@@ -72,7 +72,7 @@ export default function DevicesPage() {
             {byGroup[g].map((d) => (
               <Link
                 key={d.name}
-                href={`/console/${d.name}`}
+                href={`/portal/console/${d.name}`}
                 className={`block rounded-lg border-2 p-3 transition ${GROUP_CLR[g]} hover:brightness-125`}
               >
                 <div className="flex items-center justify-between">

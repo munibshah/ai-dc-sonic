@@ -1,16 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { API_BASE } from "@/lib/api";
+import CheckpointButton from "@/components/CheckpointButton";
 
 interface Props {
   labId: string;
   part?: "exercise" | "solution" | "overview";
+  /** Public preview: render the guide markdown but drop the interactive
+   *  checkpoint buttons (which need a session + active fabric). */
+  readOnly?: boolean;
 }
 
-export default function GuidePane({ labId, part = "exercise" }: Props) {
+// Authors embed inline widgets in the markdown via single-line, self-closing
+// tags, e.g.
+//   <checkpoint name="spine1_underlay" label="Spine 1 underlay" />
+// We pre-process the markdown source: split it at every such tag and render
+// each segment with ReactMarkdown, slotting the live React widget in between.
+// This dodges the rehype-raw dependency (and lockfile regen) while keeping
+// guide content authorable in plain Markdown.
+const WIDGET_RE = /<checkpoint\s+([^/>]*?)\s*\/>/g;
+
+interface Slice {
+  kind: "md" | "checkpoint";
+  md?: string;
+  attrs?: Record<string, string>;
+}
+
+function parseAttrs(s: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of s.matchAll(/(\w+)\s*=\s*"([^"]*)"/g)) {
+    out[m[1]] = m[2];
+  }
+  return out;
+}
+
+function splitGuide(src: string): Slice[] {
+  const slices: Slice[] = [];
+  let last = 0;
+  for (const m of src.matchAll(WIDGET_RE)) {
+    const before = src.slice(last, m.index ?? 0);
+    if (before) slices.push({ kind: "md", md: before });
+    slices.push({ kind: "checkpoint", attrs: parseAttrs(m[1] ?? "") });
+    last = (m.index ?? 0) + m[0].length;
+  }
+  const tail = src.slice(last);
+  if (tail) slices.push({ kind: "md", md: tail });
+  return slices;
+}
+
+export default function GuidePane({ labId, part = "exercise", readOnly = false }: Props) {
   const [md, setMd] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,11 +80,33 @@ export default function GuidePane({ labId, part = "exercise" }: Props) {
   if (md === null)
     return <div className="p-4 text-white/50 text-sm">Loading guide…</div>;
 
+  // In read-only preview mode, drop checkpoint widgets entirely.
+  const slices = splitGuide(md).filter((s) => !(readOnly && s.kind === "checkpoint"));
+
   return (
     <article className="prose-guide max-w-none px-6 py-4">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
+      {slices.map((s, i) => (
+        <Fragment key={i}>
+          {s.kind === "md" ? (
+            <MarkdownChunk source={s.md ?? ""} />
+          ) : (
+            <CheckpointButton
+              labId={labId}
+              name={s.attrs?.name ?? ""}
+              label={s.attrs?.label ?? s.attrs?.name ?? "(unnamed)"}
+            />
+          )}
+        </Fragment>
+      ))}
+    </article>
+  );
+}
+
+function MarkdownChunk({ source }: { source: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
           h1: ({ children }) => (
             <h1 className="text-2xl font-semibold mt-6 mb-3 text-white">{children}</h1>
           ),
@@ -108,11 +171,10 @@ export default function GuidePane({ labId, part = "exercise" }: Props) {
               {children}
             </code>
           ),
-        }}
-      >
-        {md}
-      </ReactMarkdown>
-    </article>
+      }}
+    >
+      {source}
+    </ReactMarkdown>
   );
 }
 

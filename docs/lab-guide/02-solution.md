@@ -2,7 +2,7 @@
 
 Just the commands, in build order. Open each switch's console in the UI, paste the block, verify. The *why* behind every line lives in [`01-exercise.md`](01-exercise.md) — this doc is the answer key.
 
-> **Shortcut**: if you just want to skip the exercise and get back to a working lab, run `make solve`. That `git checkout`s the committed `configs/frr/<node>/frr.conf` files (which already contain the working configuration) and reloads.
+> **Shortcut**: if you just want to skip the exercise and get back to a working lab, click **Solve** in the top bar — the orchestrator pushes the canonical FRR config into every switch and reloads. Your run gets flagged "solved" so the completion screen reflects it.
 
 ---
 
@@ -391,15 +391,9 @@ end
 
 ## End-to-end verification
 
-From your laptop:
+From the UI top bar, click **Submit ✓** — the orchestrator runs every per-step checkpoint plus the full 56-pair ping mesh, and shows you a pass/fail card below the guide. Passing every check stamps the lab Passed and opens the completion screen with your stats and a next-lab CTA.
 
-```bash
-make bgp-check    # every leaf-spine session Established, PfxRcd=13 (leaf side) / 4 (spine side)
-make ping-mesh    # 56 / 56 OK
-make lab-status   # one-shot summary
-```
-
-Or per-switch via UI consoles:
+Or per-switch via UI consoles, if you want to look around manually:
 
 ```sh
 # any leaf
@@ -459,7 +453,6 @@ The cleanest way to see this in action: look at any committed `configs/frr/<swit
 
 ## Appendix C — Want to revert?
 
-```bash
-make solve         # restores all 6 frr.conf from git and re-applies
-make lab-status    # confirm 56/56 OK + BGP Established everywhere
-```
+Click **Solve** in the top bar — the orchestrator loads the canonical FRR config into every switch and reloads. Then click **Submit ✓** to confirm 56/56 pings + BGP Established everywhere. Your run will be flagged "solved" on the completion screen.
+
+If you'd rather wipe and start fresh, click **Reset** instead.

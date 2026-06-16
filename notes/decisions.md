@@ -30,6 +30,13 @@ Brief, opinionated, dated. Append-only. Each entry: **Decision → Why → Trade
 
 **Trade-off:** For EVPN in Phase 2 we'll likely need `allowas-in` on leaf-side EVPN peering so that leaves accept routes originated by other leaves but transited through the same-AS spines. We'll document that gotcha when we get there.
 
+**Update (2026-05-26, Lab 2 build):** Empirical testing on `netreplica/docker-sonic-vs:latest` (FRR 7.5.1-sonic) inverted the textbook expectations:
+- **No `allowas-in` was needed on leaves.** Unique leaf ASNs + the standard eBGP loop-prevention (own-AS rejection) work as designed; cross-leaf EVPN routes propagate cleanly through both shared-AS spines without any leaf-side relaxation.
+- **EVPN next-hops are preserved on eBGP peers by default** in this FRR version. Confirmed empirically: on leaf3, `show bgp l2vpn evpn` shows leaf1's Type-3 route with next-hop `10.0.10.1` (leaf1's VTEP), not `10.0.0.1` (spine1's router-id). So the textbook "shared-AS spine rewrites next-hop → silent black-hole" failure mode does **not** fire in this build.
+- **No working spine-side knob exists in this build.** Both `neighbor X next-hop-unchanged` (FRR 8.x+ shorthand) and `neighbor X attribute-unchanged next-hop` (FRR 7.x token) are silently accepted by `vtysh`'s parser but never persist into `show running-config`. The shorthand also errors as `% Unknown command` in interactive vtysh on this image; the FRR 7.x form is fake-accepted (no error, no effect, no record). The spine canonical configs in `configs/frr/_overlay/spine{1,2}/frr.conf` therefore only have `neighbor LEAVES activate` on the EVPN AF — the FRR 7.5 default is the only mechanism preserving next-hops in this lab.
+- **On modern FRR 8.x+ builds** (current SONiC, recent Cumulus, plain FRR) — add `neighbor LEAVES next-hop-unchanged` to each spine as defense-in-depth. Production templates should always make the intent explicit even when the default does the right thing.
+- **Always verify a config push actually loaded** with `vtysh -c "show running-config"`. `vtysh -b` (boot-time parser) drops unknown or no-op commands without warning.
+
 ---
 
 ## ADR-003 — sonic-vs (amd64 under Rosetta) instead of an arm64-native NOS
@@ -127,6 +134,38 @@ Brief, opinionated, dated. Append-only. Each entry: **Decision → Why → Trade
 
 ---
 
+## ADR-008.1 — SONiC `config vxlan` / `config vlan` CLI DOES work; only BGP tables are broken
+**Date:** 2026-05-25
+
+**Decision:** Lab 2 (EVPN-VXLAN overlay) uses SONiC's native CLI (`config vlan add`, `config vxlan add`, `config vxlan evpn_nvo add`, `config vxlan map add`, `config interface ip add`) for the data-plane setup. Only BGP-related configuration continues to use `vtysh` directly (per ADR-008).
+
+**Why:** Phase 0 testing during Lab 2 redesign (May 2026) on the running `netreplica/docker-sonic-vs:latest` image found:
+- `/usr/local/bin/config vxlan` is fully populated with `add`, `del`, `map`, `evpn_nvo` subcommands.
+- The full SONiC CLI sequence executes cleanly:
+  ```
+  config vlan add 1000
+  config interface ip add Vlan1000 192.168.100.1/24
+  config vxlan add vtep 10.0.10.1
+  config vxlan evpn_nvo add nvo1 vtep
+  config vxlan map add vtep 1000 10100
+  ```
+  Each command returns 0 with no tracebacks.
+- swssconfig programs the kernel objects: a Linux bridge named `Bridge`, a sub-interface `Vlan1000@Bridge`, and a VXLAN dev `vtep-1000` (auto-named `<vxlan_name>-<vlan_id>`).
+- `show vxlan tunnel` and `show vxlan vlanvnimap` reflect the configured state.
+- FRR's `advertise-all-vni` (in the `address-family l2vpn evpn` block) discovers the SONiC-created VXLAN dev: `vtysh -c "show evpn vni"` lists VNI 10100 bound to `vtep-1000` with the correct Local VTEP IP.
+- `show vxlan remotevtep` populates with `Creation Source: EVPN` once peers exchange Type-3 routes.
+
+In other words: ADR-008's "config_db doesn't work" finding was BGP-specific (`BGP_GLOBALS*` tables introduced in a newer FRR/SONiC layout). The VXLAN/VLAN/EVPN_NVO tables predate that layout and are wired correctly through `swssconfig`. We had assumed without testing that the breakage was repo-wide; the test invalidates that assumption.
+
+**Trade-off:**
+- Lab 2 now teaches the SONiC-native overlay workflow — the same `config vxlan` commands a learner would use on a production switch.
+- The split CLI surface (vtysh for BGP, `config` for VXLAN) is mildly awkward to explain, but it's the truth of this image. Lab 2's overview and exercise call this out explicitly.
+- Persistence still requires `config save` to write config_db to disk; the lab doesn't do this (overlay state is re-applied via `overlay-setup.sh` on every Start/Reset/Solve, matching Lab 1's pattern).
+
+**How to apply:** When adding any new lab that touches VLAN/VXLAN/EVPN data-plane construction, **prefer SONiC `config` CLI over iproute2 or vtysh**. Reserve vtysh for BGP/FRR-protocol work where SONiC's CLI is broken. Always test before assuming a given SONiC CLI surface is broken — Phase 0 of the Lab 2 redesign showed that "everything's broken" was wrong.
+
+---
+
 ## ADR-009 — Promote UI (FastAPI + Next.js) from Phase 4 to Phase 2
 **Date:** 2026-05-24
 
@@ -165,8 +204,116 @@ Brief, opinionated, dated. Append-only. Each entry: **Decision → Why → Trade
 
 ---
 
+## ADR-011 — Upgrade switch NOS from `netreplica/docker-sonic-vs:latest` (2022) to `aidc/sonic-vs:202511` (modern SONiC)
+**Date:** 2026-05-26
+
+**Decision:** The lab now uses `aidc/sonic-vs:202511`, locally tagged from the official `docker-sonic-vs.gz` artifact published by the SONiC project's Azure CI pipeline (branch `202511`, build 1122165, dated 2026-05-25). Replaces `netreplica/docker-sonic-vs:latest` which was a 2022-vintage build and the source of every limitation ADR-008 worked around.
+
+**Why:**
+- **FRR 10.4.1** (vs. 7.5.1 in the old image) — modern protocol surface, all current EVPN/MPLS/IS-IS knobs present.
+- **SONiC `show vxlan remotevtep` now populates correctly** from APP_DB — the "always empty" quirk that drove Lab 2's `vtysh -c "show evpn vni"` fallback is gone. (The fallback in `lab2.py` still works on this image and adds zero overhead, so it stays as defense-in-depth.)
+- **Sourcing path is well-documented**: the SONiC project publishes `docker-sonic-vs.gz` nightlies for every release branch (`master`, `202511`, `202505`, `202411`, ...) discoverable via the catalog at `https://sonic.software/builds.json`. No more "the only readily-available sonic-vs image" excuse.
+- **Truly drop-in for our existing approach**: bind-mounting per-switch `frr.conf` files and running `vtysh -b` on supervisor restart works unchanged on FRR 10.4.1. Modern SONiC has a different default startup (`bgpd=no` in `/etc/frr/daemons`, `mgmtd` daemon, more complex SAI stack) but `bootstrap-switch.sh`'s explicit `supervisorctl start bgpd zebra staticd` flow already handles this.
+
+**What had to change:**
+1. **`topo/aidc.clab.yml`** — `image:` swapped from `netreplica/docker-sonic-vs:latest` to `aidc/sonic-vs:202511`. One line.
+2. **BGP-row parser bug fix** in 3 places (`orchestrator/api/dockerlib.py:count_established`, `orchestrator/api/checkpoints/lab1.py:_check_leaf1_to_spine1`, `orchestrator/api/checkpoints/lab2.py:_evpn_peer_established`). FRR 10.4 adds a trailing `Desc` column to `show bgp summary` output, breaking parsers that used `parts[-1]`. Fixed by parsing the State/PfxRcd column at fixed offset 9 (correct across both FRR 7.5 and 10.4).
+3. **Nothing else.** Per-switch FRR configs, overlay-setup.sh scripts, bootstrap-switch.sh teardown, checkpoint logic — all unchanged.
+
+**Smoke-test results (2026-05-26):**
+- Lab 1: `make solve` + `make lab-status` → 8/8 BGP peers Established, 56/56 ping mesh OK.
+- Lab 2: orchestrator `Solve` → all 6 checkpoints PASS in 9.6s (bridges_up, evpn_neighbors_up, type2_routes_present, remote_vteps_learned, overlay_ping_pair, overlay_full_mesh).
+
+**Trade-off:**
+- **Image size**: 1.75 GB vs. 1.14 GB for the old one (more SONiC daemons; expected). Across 6 switches that's ~3.6 GB more RAM-resident — well within the 47 GB headroom on the remote.
+- **Boot time**: modern SONiC's full SAI/swssconfig/orchagent stack takes ~30s to be ready vs. ~10s for the stripped 2022 image. `make warm` accommodates this with its existing 30s settle period.
+- **Image distribution**: `aidc/sonic-vs:202511` is built locally from `docker-sonic-vs.gz` (via `docker load`), not pulled from a registry. The download URL (signed Azure artifact link) expires periodically — if we need to share the image or rebuild from scratch, we either re-pull from the SONiC Azure pipeline or publish our copy to a registry. Worth scripting eventually.
+
+**How to apply:** The image is one-shot loaded on the remote. To re-create after a remote rebuild:
+```sh
+# Discover latest build URL:
+curl -s https://sonic.software/builds.json | jq -r '.["202511"]["docker-sonic-vs.gz"].url'
+# Download + load (on the lab host):
+ssh aidc-remote "curl -sSL '<url>' -o /tmp/docker-sonic-vs-202511.gz && docker load < /tmp/docker-sonic-vs-202511.gz && docker tag docker-sonic-vs:latest aidc/sonic-vs:202511"
+```
+
+**Reversion path:** Revert `topo/aidc.clab.yml` to `image: netreplica/docker-sonic-vs:latest` and revert the BGP-row parser fixes (col 9 → col -1). The 2022 image is still pulled and tagged on the remote; no re-download needed.
+
+**Obsoletes:** Most of ADR-008's pain. Specifically:
+- ADR-008's "the only readily-available sonic-vs image" framing — no longer true; the SONiC Azure pipeline is the authoritative source.
+- The `show vxlan remotevtep` empty-table workaround (still present in lab content for backward compatibility with the older image; can be cleaned up if we never want to support the 2022 image again).
+- The implication that we have to bypass config_db entirely — we're still using vtysh-driven `frr.conf` for Lab 1+2 because it's portable and predictable, but modern SONiC's config_db pipeline now works correctly, opening the door to refactoring Lab 1 around the SONiC-native `config bgp` (or YANG/mgmtd) flow in a future ADR if we want.
+
+**Doesn't obsolete:** ADR-008.1 (VXLAN tables work via SONiC CLI) — still accurate, now via modern SONiC's standard `config vxlan` flow.
+
+---
+
+## ADR-012 — Lab 4 telemetry: gnmic + Prometheus + Grafana, with a kernel-netdev side channel
+**Date:** 2026-05-26
+
+**Decision:** Lab 4 implements ADR-007's chosen stack — `gnmic → Prometheus → Grafana` — as three new always-on containers in `topo/aidc.clab.yml`, plus a parallel **netdev exporter inside the orchestrator** that exposes per-veth `/proc/net/dev` counters at `/metrics/netdev` for Prometheus to scrape. Grafana is embedded into the lab UI as an iframe in a third workbench pane (gated on a new optional `labs.json` field `grafana_dashboard_path`). Lab 4 is **procedural, not configuration-changing**: `BOOTSTRAP_STATE == SOLVE_STATE == _overlay_workers`, no FRR delta, Solve is a no-op beyond re-enabling the SONiC `telemetry` feature.
+
+**Why:**
+- ADR-007 named the stack two phases ago; this lab finally implements it.
+- **Always-on, not Lab-4-conditional** so any future lab (Lab 5 failure injection, ECN/incast, multi-tenant) inherits the dashboards for free. Avoids per-lab-id branching in the topology — `make warm` always brings up 17 containers, regardless of which lab the learner is in.
+- **gnmic + Prometheus + Grafana**, not lightweight orchestrator polling, because the headline learning objective is the streaming-telemetry model — push-based gNMI subscriptions, OpenConfig YANG paths, Prometheus rate() queries — which is what hyperscalers actually run. A custom poller would teach nothing transferable.
+- **Grafana iframe rather than native recharts** because (a) learners need to see the real production tool, not a one-off UI clone; (b) Grafana's panel editor is itself a teaching surface — learners can open the dashboard in a new tab and tinker; (c) Grafana JSON dashboards are portable to any other site that uses Prometheus.
+- **Netdev side-channel** because sonic-vs's OpenConfig surface does not bridge the clab veths (`eth1..eth4`) to the synthetic SONiC ports (per ADR-008) — `aidc_interfaces_*` counters stay flat at zero for the links that actually carry traffic. Without the side channel, the dashboards would be all-zero during a working AllReduce and the lab's pedagogical core would fail. The side channel goes away on real hardware.
+- **Embedded iframe + anonymous Grafana** (`GF_AUTH_ANONYMOUS_ENABLED=true`, `GF_AUTH_DISABLE_LOGIN_FORM=true`, `GF_SECURITY_ALLOW_EMBEDDING=true`) keeps the learner inside the lab UI for the most common interaction (just watch the chart) while still letting them open the full Grafana for deeper inspection.
+
+**Trade-off:**
+- The lab teaches streaming-telemetry-via-gnmic but the *data the learner sees* comes mostly from the netdev side channel, not from gnmic's OpenConfig stream. The `lab4-solution.md` discloses this honestly with a PromQL example showing what the dashboard would look like on real hardware. Open question whether to drop gnmic entirely (it provides essentially no data in this image) — kept for now because (a) the lab guide *teaches* gnmic, (b) future image upgrades may make it useful, (c) it's already deployed; dropping it adds complexity not subtracts.
+- Always-on telemetry stack costs ~300 MB RAM and adds ~20 s to `make warm` cold-start. Trivial against ADR-010's 47 GB headroom but worth noting if running on resource-constrained hosts.
+- The Grafana iframe needs `GF_SECURITY_ALLOW_EMBEDDING=true` plus a cross-origin cookie sandbox; if a future Grafana version tightens the X-Frame-Options story, the iframe could break. Test the iframe after any Grafana image bump.
+- We chose SONiC's legacy `telemetry` feature (port 8080, more documented) over the newer `gnmi` feature (port 50051) — both ship in `aidc/sonic-vs:202511` but `telemetry` has better gnmic-on-SONiC examples online. Reversion is one line in `lab4.py::_enable_telemetry`.
+
+**How to apply:**
+- New labs that want a dashboard: add `"grafana_dashboard_path": "/d/...?kiosk=tv&refresh=5s"` to their labs.json entry, and a new `telemetry/grafana/dashboards/<lab>.json`. The UI picks up the field automatically — no code changes.
+- New telemetry sources: add a scrape job to `telemetry/prometheus/prometheus.yml` and (if applicable) export from the orchestrator at a new `/metrics/<thing>` route.
+- A future Lab N that needs a per-queue or per-class metric will likely have to extend the netdev exporter (or add another sidecar) — sonic-vs's gNMI won't help. Keep the asymmetry between this lab and real hardware deliberate.
+
+**Reversion path:** Remove the `gnmic`/`prometheus`/`grafana` nodes from `topo/aidc.clab.yml`; remove the `lab4` import + dispatch in `orchestrator/api/labruns.py`; remove the netdev exporter route from `orchestrator/api/main.py`; flip the labs.json `id: "4"` entry back to `coming-soon`. The UI's `<TelemetryPane>` falls back cleanly on missing `grafana_dashboard_path`.
+
+---
+
+## ADR-013 — Super spines: taught conceptually in Lab 5, not deployed
+**Date:** 2026-05-28
+
+**Decision:** Lab 5 ("Super Spines — Beyond a Single-Pod CLOS") teaches the super-spine tier **conceptually** — markdown guide + inspection commands against the existing 2-tier fabric — rather than deploying additional `supersp1`/`supersp2` containers above the current spines. `BOOTSTRAP_STATE == SOLVE_STATE == _overlay_workers`; the lab does not change fabric state at all. The new Lab 5 takes id `"5"`; the old `coming-soon` Lab 5 (failure injection) renumbers to id `"6"`.
+
+This insertion is **off the documented Phase 4 roadmap** (which sequenced telemetry → failure injection → incast/ECN). The user explicitly chose to slot super-spines in between Lab 4 and the failure lab, as a conceptual stop that reframes the rest of Phase 4 in terms of pod boundaries.
+
+**Why conceptual instead of deployed:**
+
+A deployed super-spine lab was scoped (see `/Users/umihani/.claude/plans/add-another-lab-between-ancient-river.md` history if recoverable, or rebuild from the appendix below). It required:
+
+- 2 new sonic-vs containers (`supersp1`, `supersp2`) and 4 new veth links in `topo/aidc.clab.yml`.
+- A new FRR state directory `_super_spine/` with 8 config files (full configs for spine1/2 + supersp1/2, leaf1-4 identical copies).
+- **Cascading state-file work**: every existing FRR state dir (`_skeleton`, `_canonical`, `_overlay`, `_overlay_workers`) needed blank supersp1/supersp2 subdirs added because `orchestrator/api/labruns.py::_apply_configs` iterates the module-level `SWITCHES` constant and raises `FileNotFoundError` if any switch in the list is missing from the source dir. Without these blanks, Labs 1-4 break.
+- **Cascading code edits**: extend `labruns.py::SWITCHES`, `netdev_exporter.py::SWITCHES`, `main.py::DEVICE_GROUPS` (new `super_spine` group for the topology page / console picker), Makefile `SPINES`/`SWITCHES_FRR`, and `telemetry/gnmic/gnmic.yaml` targets.
+- A new ASN + IP allocation (`AS 64999` shared; `10.3.0.0/16` /31 block — `10.2.x.x` collides with worker /31s per `workers/entrypoint.sh` and `orchestrator/api/labruns.py:172`).
+- 6 lab-5 checkpoints (`supersp_interfaces_up`, two `supersp_to_spineN_established`, `vtep_reachability_ecmp`, regression `submit_finale_ping_mesh_intact`, etc.).
+
+That blast radius is **disproportionate to the pedagogical payoff** when the deployed super spines wouldn't carry any actual cross-pod traffic — the platform has one pod, so no traffic naturally traverses the new tier even if it's wired and Established. The hands-on moment would be "type the BGP config, see two more sessions come up, click the ECMP check," and the *interesting* parts of super spines (multi-pod scheduling, blast-radius isolation, scale math) are still markdown-only either way. The conceptual lab delivers the same conceptual payload without the platform surgery.
+
+**Trade-off:**
+
+- The lab is honest about being conceptual. The exercise's Step 4 includes the would-be FRR config blocks as reference reading (not paste-into-console), so a learner who wants the BGP shape gets it. The solution doc carries the full `_super_spine/` state config blocks as Appendix A.
+- No hands-on configuration moment in Lab 5. Mitigated by the three inspection checkpoints (`fabric_healthy_two_tier`, `spine_fanout_observed`, `per_pod_ecmp_observed`) — each is a "now you've seen the thing the guide just claimed" beat.
+- The Solve button is a no-op re-apply of `_overlay_workers`. UI copy reads slightly off ("Apply the solution config") but isn't strictly wrong — Solve does apply the lab's canonical config; that config just equals the bootstrap state. Decision: tolerate; add `solve_dialog_body` as optional `labs.json` metadata only if the UI walk-through flags it as confusing.
+
+**How to apply:**
+
+- Future labs that fit a "explain a concept without deploying it" mold should follow Lab 5's shape: reuse an existing FRR state for both BOOTSTRAP and SOLVE, build inspection-only checkpoints that pass against the healthy baseline, include would-be config blocks as reference reading rather than paste targets, and keep the regression-guard ping mesh as the submit finale.
+- If a later phase wants a *deployed* super-spine lab (e.g. a hypothetical multi-pod Lab 7 with a second pod and real cross-pod traffic), this lab's content stays — the deployment work is purely additive behind it.
+
+**Reversion path:** Replace the lab id `"5"` entry in `orchestrator/api/labs.json` with a pre-Lab-5 version of itself, drop `lab5` from `labruns.py::_LAB_MODULES` and the `from .checkpoints import ... lab5` line, delete `orchestrator/api/checkpoints/lab5.py` and the three `docs/lab-guide/lab5-*.md` files, undo the two README phrasing edits, restore the failure-injection lab's id back to `"5"`. No fabric / topology / FRR state was changed — clean reversal.
+
+---
+
 ## Pending decisions
 
 - **RDMA / RoCEv2 simulation?** Currently deferred to a hypothetical Phase 5. Soft-RoCE (`rxe`) works in Linux containers but adds complexity. Need to decide if it adds enough learning value before building.
 - **In-band telemetry (INT)?** Skipping. Real INT requires P4/Tofino. We'll mention it conceptually in the telemetry blog.
 - **Multi-tenant L3 EVPN demo?** Will add a second VNI (gpu-pod-a, VNI 10101 with L3VNI 30001) in Phase 4 if there's time.
+- **gnmic-only telemetry on a future SONiC build?** If a later sonic-vs image starts bridging clab veths to the synthetic Ethernet ports, the netdev side-channel becomes redundant. Track upstream SONiC for that change and plan to drop the side channel when it lands.

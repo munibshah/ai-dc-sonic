@@ -1,126 +1,116 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Device, Lab, fetchDevices, fetchLab } from "@/lib/api";
+import Link from "next/link";
+import { fetchLab, type Lab } from "@/lib/api";
+import { holderStatus } from "@/lib/booking";
 import GuidePane from "@/components/GuidePane";
-import TabbedTerminals, { TabbedTerminalsHandle } from "@/components/TabbedTerminals";
-import TopologyOverlay from "@/components/TopologyOverlay";
 
-export default function LabWorkbenchPage() {
-  const params = useParams<{ id: string }>();
-  const labId = params?.id as string;
-
+// Public, read-only lab preview. Anyone can read the guide here; running it
+// (consoles, Start/Solve, checkpoints) lives behind sign-in at /portal/labs/[id].
+export default function LabPreviewPage() {
+  const { id } = useParams<{ id: string }>();
   const [lab, setLab] = useState<Lab | null>(null);
-  const [labError, setLabError] = useState<string | null>(null);
-  const [devices, setDevices] = useState<Device[] | null>(null);
-  const [topoOpen, setTopoOpen] = useState(false);
-  const terminalsRef = useRef<TabbedTerminalsHandle>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [part, setPart] = useState<"overview" | "exercise">("overview");
+  const [canLaunch, setCanLaunch] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    fetchLab(labId)
+    fetchLab(id)
       .then((l) => alive && setLab(l))
-      .catch((e) => alive && setLabError(String(e)));
+      .catch((e) => alive && setError(String(e)));
+    // Signed-in slot-holders get a Launch CTA; anonymous/non-holders get Book.
+    holderStatus()
+      .then((h) => alive && setCanLaunch(Boolean(h.you_hold)))
+      .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [labId]);
+  }, [id]);
 
-  useEffect(() => {
-    let alive = true;
-    const tick = () =>
-      fetchDevices()
-        .then((d) => alive && setDevices(d))
-        .catch(() => {});
-    tick();
-    const t = setInterval(tick, 8000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+  const cta = canLaunch
+    ? { href: `/portal/labs/${id}`, label: "Launch this lab →", cls: "bg-emerald-500/90 hover:bg-emerald-500" }
+    : { href: "/portal", label: "Book a slot to run this lab →", cls: "bg-sky-500/90 hover:bg-sky-500" };
 
-  function openNodeTerminal(name: string) {
-    terminalsRef.current?.openTerminal(name);
-  }
-
-  if (labError)
+  if (error)
     return (
-      <div className="p-6 rounded border border-rose-500/40 bg-rose-500/10 text-rose-200">
-        Lab not found: {labError}
-        <div className="mt-2 text-sm">
-          <Link href="/" className="underline">← back to labs</Link>
-        </div>
+      <div className="mx-auto max-w-3xl mt-10 p-6 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-200 text-sm">
+        Couldn&apos;t load this lab: {error}
       </div>
     );
-  if (!lab) return <p className="text-white/60">Loading lab…</p>;
-
-  const upCount = devices?.filter((d) => d.running).length ?? 0;
-  const totalCount = devices?.length ?? 0;
+  if (!lab) return <p className="text-white/60 text-center mt-12">Loading…</p>;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="text-white/60 hover:text-white text-sm">
-            ← labs
-          </Link>
+    <div className="mx-auto max-w-4xl">
+      <div className="mb-4 text-sm text-white/50">
+        <Link href="/" className="hover:text-white/80">
+          ← All labs
+        </Link>
+      </div>
+
+      <header className="rounded-2xl border border-purple-500/20 bg-gradient-to-br from-[#0b0820] via-[#120a2e] to-[#1a0d3b] p-6 md:p-8">
+        <div className="flex items-center gap-2 mb-3">
           <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/60 bg-white/5">
             Lab {lab.id}
           </span>
-          <h1 className="text-xl font-semibold text-white">{lab.title}</h1>
-          {devices && (
-            <span
-              className={`text-xs px-2 py-0.5 rounded ${
-                upCount === totalCount
-                  ? "bg-emerald-500/20 text-emerald-300"
-                  : "bg-amber-500/20 text-amber-300"
-              }`}
-              title="containers running"
-            >
-              {upCount}/{totalCount} up
-            </span>
+          {lab.duration_min && (
+            <span className="text-[11px] text-white/40">~{lab.duration_min} min</span>
           )}
         </div>
+        <h1 className="text-3xl font-semibold text-white">{lab.title}</h1>
+        <p className="text-white/70 mt-3 max-w-2xl leading-relaxed">{lab.summary}</p>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setTopoOpen(true)}
-            disabled={!devices}
-            className="px-3 py-1.5 rounded border border-white/20 bg-white/5 hover:bg-white/10 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Topology
-          </button>
+        {lab.learning_objectives && lab.learning_objectives.length > 0 && (
+          <ul className="mt-5 grid sm:grid-cols-2 gap-x-6 gap-y-1">
+            {lab.learning_objectives.map((o) => (
+              <li key={o} className="text-sm text-white/70 flex gap-2">
+                <span className="text-emerald-400/70">✓</span>
+                {o}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="mt-6 flex flex-wrap gap-3">
+          {/* Plain anchor: a top-level navigation so the /portal auth check + login
+              redirect happen cleanly (not a client-side RSC fetch). */}
+          <a href={cta.href} className={`rounded-lg ${cta.cls} px-5 py-2.5 text-sm font-semibold text-white`}>
+            {cta.label}
+          </a>
         </div>
+      </header>
+
+      <div className="mt-6 flex gap-2">
+        {(["overview", "exercise"] as const).map((p) => (
+          <button
+            key={p}
+            onClick={() => setPart(p)}
+            className={`px-3 py-1.5 rounded-lg text-sm capitalize ${
+              part === p
+                ? "bg-white/15 text-white"
+                : "bg-white/5 text-white/60 hover:text-white/90"
+            }`}
+          >
+            {p === "exercise" ? "What you'll do" : "Overview"}
+          </button>
+        ))}
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-3 flex-1 min-h-0">
-        <section className="flex-1 min-h-0 lg:basis-0 rounded-lg border border-white/10 bg-black/30 overflow-y-auto">
-          <GuidePane labId={lab.id} part="exercise" />
-        </section>
-
-        <section className="flex-1 min-h-0 lg:basis-0 rounded-lg border border-white/10 bg-black overflow-hidden flex flex-col">
-          <TabbedTerminals
-            ref={terminalsRef}
-            onRequestPickDevice={() => devices && setTopoOpen(true)}
-            emptyMessage={
-              <span>
-                No terminals open yet. Click <strong className="text-white/70">Topology</strong> above (or the <strong className="text-white/70">+</strong> here) to pick a device.
-              </span>
-            }
-          />
-        </section>
+      <div className="mt-3 rounded-xl border border-white/10 bg-black/30">
+        <GuidePane labId={lab.id} part={part} readOnly />
       </div>
 
-      {topoOpen && devices && (
-        <TopologyOverlay
-          devices={devices}
-          onPickNode={openNodeTerminal}
-          onClose={() => setTopoOpen(false)}
-        />
-      )}
+      <div className="my-8 rounded-xl border border-white/10 bg-black/20 p-6 text-center">
+        <p className="text-white/70">Ready to get hands-on with a real fabric?</p>
+        <a
+          href="/portal"
+          className="inline-block mt-3 rounded-lg bg-purple-500/80 hover:bg-purple-500 px-5 py-2.5 text-sm font-semibold text-white"
+        >
+          Book your slot →
+        </a>
+      </div>
     </div>
   );
 }

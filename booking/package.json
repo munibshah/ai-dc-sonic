@@ -1,0 +1,19 @@
+{
+  "name": "aidc-booking",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AIDC lab booking backend — Cloudflare Worker + D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "schema:local": "wrangler d1 execute aidc-booking --file=schema.sql",
+    "schema:remote": "wrangler d1 execute aidc-booking --remote --file=schema.sql",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^3.95.0"
+  }
+}
