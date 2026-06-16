@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { runCheckpoint, type CheckResult } from "@/lib/api";
+import { Check, X, ArrowRight } from "@/components/icons";
 
 interface Props {
   labId: string;
@@ -51,7 +52,7 @@ export default function CheckpointButton({ labId, name, label }: Props) {
       >
         <Icon state={state.kind} />
         <span>
-          Check <span className="opacity-70">▸</span> {label}
+          Check <span className="opacity-40">·</span> {label}
         </span>
       </button>
       {open && (state.kind === "pass" || state.kind === "fail" || state.kind === "error") && (
@@ -68,12 +69,12 @@ function Icon({ state }: { state: State["kind"] }) {
     );
   }
   if (state === "pass") {
-    return <span className="text-base leading-none">✓</span>;
+    return <Check className="w-4 h-4" />;
   }
   if (state === "fail" || state === "error") {
-    return <span className="text-base leading-none">✗</span>;
+    return <X className="w-4 h-4" />;
   }
-  return <span className="text-base leading-none">▶</span>;
+  return <ArrowRight className="w-4 h-4" />;
 }
 
 type ResultState = Extract<State, { kind: "pass" | "fail" | "error" }>;
@@ -89,10 +90,10 @@ function ResultBox({ state, onClose }: { state: ResultState; onClose: () => void
           </div>
           <button
             onClick={onClose}
-            className="text-rose-200/70 hover:text-rose-100 text-xs"
-            aria-label="dismiss"
+            className="text-rose-200/70 hover:text-rose-100"
+            aria-label="Dismiss"
           >
-            ✕
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -119,10 +120,10 @@ function ResultBox({ state, onClose }: { state: ResultState; onClose: () => void
         </div>
         <button
           onClick={onClose}
-          className="opacity-70 hover:opacity-100 text-xs"
-          aria-label="dismiss"
+          className="opacity-70 hover:opacity-100"
+          aria-label="Dismiss"
         >
-          ✕
+          <X className="w-3.5 h-3.5" />
         </button>
       </div>
     </div>

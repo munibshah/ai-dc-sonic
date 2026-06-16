@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { Lab, fetchLabs } from "@/lib/api";
+import { ArrowRight, Check } from "@/components/icons";
 
 export default function LabsIndex() {
   const [labs, setLabs] = useState<Lab[] | null>(null);
@@ -29,11 +30,7 @@ export default function LabsIndex() {
 
   return (
     <div className="space-y-8">
-      <header className="relative overflow-hidden rounded-2xl border border-purple-500/20 bg-gradient-to-br from-[#0b0820] via-[#120a2e] to-[#1a0d3b] px-6 py-8 md:px-10 md:py-10">
-        <div
-          className="absolute inset-y-0 right-0 w-1/2 opacity-15 pointer-events-none bg-[radial-gradient(ellipse_at_right,_rgba(168,85,247,0.55),_transparent_60%)]"
-          aria-hidden
-        />
+      <header className="brand-hero rounded-2xl px-6 py-8 md:px-10 md:py-10">
         <div className="relative flex flex-col md:flex-row items-start md:items-center gap-6 md:gap-8">
           <Image
             src="/lion-logo.png"
@@ -64,11 +61,8 @@ export default function LabsIndex() {
               <em> why</em> behind every design decision.
             </p>
             <div className="mt-5 flex flex-wrap gap-3">
-              <a
-                href="/portal"
-                className="rounded-lg bg-purple-500/80 hover:bg-purple-500 px-4 py-2 text-sm font-medium text-white transition"
-              >
-                Book a slot or instructor-led training →
+              <a href="/portal" className="btn btn-primary">
+                Book a slot or instructor-led training <ArrowRight className="w-4 h-4" />
               </a>
             </div>
           </div>
@@ -152,7 +146,7 @@ export function LabCard({ lab }: { lab: Lab }) {
         <ul className="mt-4 space-y-1">
           {lab.learning_objectives.slice(0, 4).map((obj) => (
             <li key={obj} className="text-xs text-white/60 flex gap-2">
-              <span className="text-emerald-400/70">✓</span>
+              <Check className="w-3.5 h-3.5 shrink-0 mt-px text-[var(--accent-positive)]" />
               {obj}
             </li>
           ))}
@@ -160,8 +154,8 @@ export function LabCard({ lab }: { lab: Lab }) {
       )}
 
       {isActive && (
-        <div className="mt-5 text-sm text-emerald-300 group-hover:text-emerald-200">
-          Enter lab →
+        <div className="mt-5 text-sm text-emerald-300 group-hover:text-emerald-200 inline-flex items-center gap-1.5">
+          Enter lab <ArrowRight className="w-3.5 h-3.5" />
         </div>
       )}
     </div>

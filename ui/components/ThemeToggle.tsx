@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Sun, Moon } from "@/components/icons";
 
 type Theme = "default" | "vesper";
 
@@ -52,7 +53,7 @@ export default function ThemeToggle() {
       }
       className="text-xs px-2.5 py-1 rounded-full border border-white/20 bg-white/5 hover:bg-white/10 text-white/80 inline-flex items-center gap-1.5 transition-colors"
     >
-      <span aria-hidden>{isVesper ? "☀" : "◐"}</span>
+      {isVesper ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
       <span>{isVesper ? "Vesper" : "Dark"}</span>
     </button>
   );

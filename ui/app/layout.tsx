@@ -49,7 +49,7 @@ export default function RootLayout({
       </head>
       <body>
         <ToastsProvider>
-          <header className="border-b border-white/10 bg-[#0b1020]">
+          <header className="border-b border-white/10 bg-[#0b1020] sticky top-0 z-40 backdrop-blur-sm">
             <div className="mx-auto max-w-7xl px-4 py-3 flex items-center gap-6">
               <Link
                 href="/"
@@ -72,14 +72,14 @@ export default function RootLayout({
                 />
                 <span className="leading-tight">
                   <span className="block text-sm font-semibold text-white">AI DC</span>
-                  <span className="block text-[10px] uppercase tracking-[0.18em] text-purple-300/80">
+                  <span className="block text-[10px] uppercase tracking-[0.18em] text-[var(--accent-brand)]">
                     Training Course
                   </span>
                 </span>
               </Link>
-              <nav className="text-sm text-white/70 flex gap-4">
-                <Link href="/" className="hover:text-white">Labs</Link>
-                <a href="/portal" className="hover:text-white">Book a slot</a>
+              <nav className="text-sm text-white/70 flex gap-5">
+                <Link href="/" className="hover:text-white transition-colors">Labs</Link>
+                <a href="/portal" className="hover:text-white transition-colors">Book a slot</a>
               </nav>
               <div className="ml-auto flex items-center gap-4">
                 <AccountControl />

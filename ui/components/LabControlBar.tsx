@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Lab, LabRun } from "@/lib/api";
+import { ArrowLeft, Bolt, Check } from "@/components/icons";
 
 export type LabAction = "start" | "reset" | "solve" | "submit";
 
@@ -55,8 +56,8 @@ export default function LabControlBar({
   return (
     <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
       <div className="flex items-center gap-3 flex-wrap">
-        <Link href="/" className="text-white/60 hover:text-white text-sm">
-          ← labs
+        <Link href="/" className="inline-flex items-center gap-1.5 text-white/60 hover:text-white text-sm transition-colors">
+          <ArrowLeft className="w-3.5 h-3.5" /> labs
         </Link>
         <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/60 bg-white/5">
           Lab {lab.id}
@@ -158,7 +159,8 @@ export default function LabControlBar({
             onClick={onStart}
             disabled={anyBusy}
             active={busy === "start"}
-            idleLabel="Start lab ▶"
+            icon={<Bolt className="w-3.5 h-3.5" />}
+            idleLabel="Start lab"
             activeLabel="Starting lab…"
             variant="sky-primary"
           />
@@ -167,7 +169,8 @@ export default function LabControlBar({
             onClick={onSubmit}
             disabled={anyBusy}
             active={busy === "submit"}
-            idleLabel={state === "in_progress" ? "Submit ✓" : "Re-run checks"}
+            icon={state === "in_progress" ? <Check className="w-3.5 h-3.5" /> : undefined}
+            idleLabel={state === "in_progress" ? "Submit" : "Re-run checks"}
             activeLabel="Running checks…"
             variant="emerald-primary"
           />
@@ -183,6 +186,7 @@ function ActionButton({
   onClick,
   disabled,
   active,
+  icon,
   idleLabel,
   activeLabel,
   title,
@@ -191,6 +195,7 @@ function ActionButton({
   onClick: () => void;
   disabled?: boolean;
   active?: boolean;
+  icon?: React.ReactNode;
   idleLabel: string;
   activeLabel: string;
   title?: string;
@@ -215,7 +220,7 @@ function ActionButton({
       } ${active ? "cursor-wait" : ""}`}
     >
       <span className="inline-flex items-center gap-1.5">
-        {active && <Spinner />}
+        {active ? <Spinner /> : icon}
         <span>{active ? activeLabel : idleLabel}</span>
       </span>
     </button>
@@ -264,7 +269,7 @@ function StatePill({ state, run }: { state: LabRun["state"] | "not_started"; run
     colors = "bg-emerald-500/20 text-emerald-200";
     inner = (
       <>
-        <span>✓</span> Passed
+        <Check className="w-3 h-3" /> Passed
         {run?.used_solve ? <span className="opacity-70">(solved)</span> : null}
       </>
     );

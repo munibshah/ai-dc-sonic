@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { Lab, LabRun } from "@/lib/api";
+import { Check, ArrowRight } from "@/components/icons";
 
 interface Props {
   lab: Lab;
@@ -22,8 +23,8 @@ export default function PassedScreen({ lab, run, onDismiss }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-300 text-3xl mb-3 border border-emerald-400/40">
-            ✓
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-300 mb-3 border border-emerald-400/40">
+            <Check className="w-8 h-8" />
           </div>
           <h2 className="text-2xl font-semibold text-white">Lab complete</h2>
           <p className="mt-1 text-emerald-200/90">You finished <strong>{lab.title}</strong>.</p>
@@ -38,10 +39,10 @@ export default function PassedScreen({ lab, run, onDismiss }: Props) {
         <div className="mt-6 flex flex-col gap-2">
           <Link
             href={`/portal/labs/${nextLabId(lab.id)}`}
-            className="block text-center px-4 py-2 rounded-lg border border-emerald-400/60 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 font-semibold"
+            className="flex items-center justify-center gap-2 text-center px-4 py-2 rounded-lg border border-emerald-400/60 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 font-semibold transition-colors"
             onClick={onDismiss}
           >
-            Continue to Lab {nextLabId(lab.id)} →
+            Continue to Lab {nextLabId(lab.id)} <ArrowRight className="w-4 h-4" />
           </Link>
           <button
             onClick={onDismiss}

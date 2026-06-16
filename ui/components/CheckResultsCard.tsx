@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { CheckResult, SubmitResult } from "@/lib/api";
+import { Check, X } from "@/components/icons";
 
 interface Props {
   result: SubmitResult;
@@ -38,7 +39,7 @@ export default function CheckResultsCard({ result }: Props) {
     headerClasses = "bg-emerald-500/10 border-emerald-400/30 text-emerald-100";
     header = (
       <>
-        <div className="font-semibold">✓ All checks passed</div>
+        <div className="font-semibold inline-flex items-center gap-2"><Check className="w-4 h-4" /> All checks passed</div>
         <div className="text-xs opacity-70">
           Submit · {(result.duration_ms / 1000).toFixed(1)}s · {pass}/{total} OK
         </div>
@@ -48,8 +49,8 @@ export default function CheckResultsCard({ result }: Props) {
     headerClasses = "bg-rose-500/10 border-rose-400/30 text-rose-100";
     header = (
       <>
-        <div className="font-semibold">
-          ✗ {fail} of {total} check{total === 1 ? "" : "s"} failed
+        <div className="font-semibold inline-flex items-center gap-2">
+          <X className="w-4 h-4" /> {fail} of {total} check{total === 1 ? "" : "s"} failed
         </div>
         <div className="text-xs opacity-70">
           Submit · {(result.duration_ms / 1000).toFixed(1)}s · {pass}/{total} OK
@@ -99,11 +100,11 @@ function CheckRow({ result }: { result: CheckResult }) {
         className="check-row-tint w-full px-4 py-2 flex items-start gap-3 text-left hover:bg-white/5"
       >
         <span
-          className={`mt-0.5 inline-block w-4 h-4 flex-none rounded-full text-[10px] leading-4 text-center font-semibold check-row-tint ${
+          className={`mt-0.5 inline-flex items-center justify-center w-4 h-4 flex-none rounded-full check-row-tint ${
             ok ? "bg-emerald-500/30 text-emerald-200" : "bg-rose-500/30 text-rose-200"
           }`}
         >
-          {ok ? "✓" : "✗"}
+          {ok ? <Check className="w-2.5 h-2.5" /> : <X className="w-2.5 h-2.5" />}
         </span>
         <span className="flex-1 min-w-0">
           <span className="block text-sm text-white/90 font-medium">{result.label}</span>

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { fetchLab, type Lab } from "@/lib/api";
 import { holderStatus } from "@/lib/booking";
 import GuidePane from "@/components/GuidePane";
+import { ArrowLeft, ArrowRight, Check, Clock } from "@/components/icons";
 
 // Public, read-only lab preview. Anyone can read the guide here; running it
 // (consoles, Start/Solve, checkpoints) lives behind sign-in at /portal/labs/[id].
@@ -31,8 +32,8 @@ export default function LabPreviewPage() {
   }, [id]);
 
   const cta = canLaunch
-    ? { href: `/portal/labs/${id}`, label: "Launch this lab →", cls: "bg-emerald-500/90 hover:bg-emerald-500" }
-    : { href: "/portal", label: "Book a slot to run this lab →", cls: "bg-sky-500/90 hover:bg-sky-500" };
+    ? { href: `/portal/labs/${id}`, label: "Launch this lab", cls: "btn-success" }
+    : { href: "/portal", label: "Book a slot to run this lab", cls: "btn-primary" };
 
   if (error)
     return (
@@ -45,40 +46,44 @@ export default function LabPreviewPage() {
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-4 text-sm text-white/50">
-        <Link href="/" className="hover:text-white/80">
-          ← All labs
+        <Link href="/" className="inline-flex items-center gap-1.5 hover:text-white/80 transition-colors">
+          <ArrowLeft className="w-3.5 h-3.5" /> All labs
         </Link>
       </div>
 
-      <header className="rounded-2xl border border-purple-500/20 bg-gradient-to-br from-[#0b0820] via-[#120a2e] to-[#1a0d3b] p-6 md:p-8">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/60 bg-white/5">
-            Lab {lab.id}
-          </span>
-          {lab.duration_min && (
-            <span className="text-[11px] text-white/40">~{lab.duration_min} min</span>
+      <header className="brand-hero rounded-2xl p-6 md:p-9">
+        <div className="relative">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/70 bg-white/5 border border-white/10">
+              Lab {lab.id}
+            </span>
+            {lab.duration_min && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-white/45">
+                <Clock className="w-3.5 h-3.5" /> ~{lab.duration_min} min
+              </span>
+            )}
+          </div>
+          <h1 className="text-3xl md:text-4xl font-semibold text-white tracking-tight">{lab.title}</h1>
+          <p className="text-white/70 mt-3 max-w-2xl leading-relaxed">{lab.summary}</p>
+
+          {lab.learning_objectives && lab.learning_objectives.length > 0 && (
+            <ul className="mt-6 grid sm:grid-cols-2 gap-x-6 gap-y-2">
+              {lab.learning_objectives.map((o) => (
+                <li key={o} className="text-sm text-white/70 flex gap-2.5">
+                  <Check className="w-4 h-4 shrink-0 mt-0.5 text-[var(--accent-positive)]" />
+                  {o}
+                </li>
+              ))}
+            </ul>
           )}
-        </div>
-        <h1 className="text-3xl font-semibold text-white">{lab.title}</h1>
-        <p className="text-white/70 mt-3 max-w-2xl leading-relaxed">{lab.summary}</p>
 
-        {lab.learning_objectives && lab.learning_objectives.length > 0 && (
-          <ul className="mt-5 grid sm:grid-cols-2 gap-x-6 gap-y-1">
-            {lab.learning_objectives.map((o) => (
-              <li key={o} className="text-sm text-white/70 flex gap-2">
-                <span className="text-emerald-400/70">✓</span>
-                {o}
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <div className="mt-6 flex flex-wrap gap-3">
-          {/* Plain anchor: a top-level navigation so the /portal auth check + login
-              redirect happen cleanly (not a client-side RSC fetch). */}
-          <a href={cta.href} className={`rounded-lg ${cta.cls} px-5 py-2.5 text-sm font-semibold text-white`}>
-            {cta.label}
-          </a>
+          <div className="mt-7 flex flex-wrap gap-3">
+            {/* Plain anchor: a top-level navigation so the /portal auth check + login
+                redirect happen cleanly (not a client-side RSC fetch). */}
+            <a href={cta.href} className={`btn ${cta.cls} btn-lg`}>
+              {cta.label} <ArrowRight className="w-4 h-4" />
+            </a>
+          </div>
         </div>
       </header>
 
@@ -102,13 +107,11 @@ export default function LabPreviewPage() {
         <GuidePane labId={lab.id} part={part} readOnly />
       </div>
 
-      <div className="my-8 rounded-xl border border-white/10 bg-black/20 p-6 text-center">
-        <p className="text-white/70">Ready to get hands-on with a real fabric?</p>
-        <a
-          href="/portal"
-          className="inline-block mt-3 rounded-lg bg-purple-500/80 hover:bg-purple-500 px-5 py-2.5 text-sm font-semibold text-white"
-        >
-          Book your slot →
+      <div className="my-10 rounded-2xl border border-white/10 bg-black/20 p-8 text-center">
+        <p className="text-white/80 text-lg font-medium">Ready to get hands-on with a real fabric?</p>
+        <p className="text-white/50 text-sm mt-1">Book a slot and the fabric is yours for the window.</p>
+        <a href="/portal" className="btn btn-primary btn-lg mt-5">
+          Book your slot <ArrowRight className="w-4 h-4" />
         </a>
       </div>
     </div>

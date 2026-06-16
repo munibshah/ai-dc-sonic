@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Check, X, Info } from "@/components/icons";
 
 export type ToastTone = "success" | "info" | "error";
 
@@ -62,24 +63,24 @@ function ToastBubble({ toast, onClose }: { toast: Toast; onClose: () => void }) 
       : toast.tone === "error"
       ? "border-rose-400/40 bg-rose-500/15 text-rose-100"
       : "border-sky-400/40 bg-sky-500/15 text-sky-100";
-  const icon = toast.tone === "success" ? "✓" : toast.tone === "error" ? "✗" : "ℹ";
+  const Icon = toast.tone === "success" ? Check : toast.tone === "error" ? X : Info;
   // CSS-driven enter animation (uses globals.css `@keyframes toast-in`).
   return (
     <div
       role="status"
-      className={`rounded-lg border ${colors} shadow-lg backdrop-blur-sm px-3 py-2 flex items-start gap-2 toast-enter`}
+      className={`rounded-lg border ${colors} shadow-lg backdrop-blur-sm px-3 py-2.5 flex items-start gap-2.5 toast-enter`}
     >
-      <span className="font-bold leading-none mt-0.5">{icon}</span>
+      <Icon className="w-4 h-4 shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
         <div className="text-sm font-semibold">{toast.title}</div>
         {toast.body && <div className="text-xs opacity-85 mt-0.5 whitespace-pre-wrap">{toast.body}</div>}
       </div>
       <button
         onClick={onClose}
-        aria-label="dismiss"
-        className="opacity-60 hover:opacity-100 text-xs leading-none ml-1 mt-0.5"
+        aria-label="Dismiss notification"
+        className="opacity-60 hover:opacity-100 transition-opacity ml-1 mt-0.5"
       >
-        ✕
+        <X className="w-3.5 h-3.5" />
       </button>
     </div>
   );

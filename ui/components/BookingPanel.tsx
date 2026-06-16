@@ -13,6 +13,7 @@ import {
   type TrainingSession,
 } from "@/lib/booking";
 import { useToasts } from "@/components/Toast";
+import { ArrowRight, Calendar, Clock } from "@/components/icons";
 
 function fmtDate(iso: string): string {
   try {
@@ -90,9 +91,11 @@ export default function BookingPanel() {
   return (
     <div className="space-y-8">
       {/* ---- Instructor-led training ------------------------------------ */}
-      <section className="rounded-2xl border border-purple-500/20 bg-gradient-to-br from-[#0b0820] via-[#120a2e] to-[#1a0d3b] p-6">
-        <div className="text-[11px] uppercase tracking-[0.22em] text-purple-300/80 mb-2">
-          Instructor-led
+      <section className="brand-hero rounded-2xl p-6 md:p-7">
+        <div className="relative">
+        <div className="flex items-center gap-2 mb-2">
+          <Calendar className="w-4 h-4 text-[var(--accent-brand)]" />
+          <span className="eyebrow">Instructor-led</span>
         </div>
         <h2 className="text-2xl font-semibold text-white">Book SONiC training</h2>
         {session === undefined ? (
@@ -122,9 +125,9 @@ export default function BookingPanel() {
                   onClick={() =>
                     guard("training", () => leaveTraining(session.id), "Removed from the roster")
                   }
-                  className="rounded-lg border border-white/20 px-4 py-2 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50"
+                  className="btn btn-secondary"
                 >
-                  You're in — remove my name
+                  You&apos;re in — remove my name
                 </button>
               ) : (
                 <button
@@ -132,14 +135,15 @@ export default function BookingPanel() {
                   onClick={() =>
                     guard("training", () => joinTraining(session.id), "Added to the roster")
                   }
-                  className="rounded-lg bg-purple-500/80 hover:bg-purple-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  className="btn btn-primary"
                 >
-                  Add my name
+                  Add my name <ArrowRight className="w-4 h-4" />
                 </button>
               )}
             </div>
           </div>
         )}
+        </div>
       </section>
 
       {/* ---- Self-serve lab slots --------------------------------------- */}
@@ -169,17 +173,14 @@ export default function BookingPanel() {
                       </span>
                     )}
                     {live && (
-                      <a
-                        href="/"
-                        className="rounded-lg bg-emerald-500/80 hover:bg-emerald-500 px-3 py-1.5 text-xs font-medium text-white"
-                      >
-                        Browse labs to run →
+                      <a href="/" className="btn btn-success btn-sm">
+                        Browse labs to run <ArrowRight className="w-3.5 h-3.5" />
                       </a>
                     )}
                     <button
                       disabled={busy === s.id}
                       onClick={() => guard(s.id, () => cancelSlot(s.id), "Booking cancelled")}
-                      className="ml-auto text-xs text-white/60 hover:text-rose-300 disabled:opacity-50"
+                      className="ml-auto text-xs text-white/60 hover:text-rose-300 transition-colors disabled:opacity-50"
                     >
                       Cancel
                     </button>
@@ -201,14 +202,15 @@ export default function BookingPanel() {
               {available.map((s) => (
                 <li
                   key={s.id}
-                  className="flex items-center gap-3 rounded-xl border border-white/15 bg-black/40 px-4 py-3"
+                  className="flex items-center gap-3 rounded-xl border border-white/12 bg-black/30 px-4 py-3 transition-colors hover:border-white/20"
                 >
+                  <Clock className="w-4 h-4 text-white/40 shrink-0" />
                   <span className="text-sm text-white/90">{fmtRange(s.starts_at, s.ends_at)}</span>
-                  <span className="text-[10px] uppercase tracking-wider text-white/40">Free</span>
+                  <span className="text-[10px] uppercase tracking-wider text-emerald-300/70">Free</span>
                   <button
                     disabled={busy === s.id}
                     onClick={() => guard(s.id, () => bookSlot(s.id), "Slot reserved")}
-                    className="ml-auto rounded-lg bg-sky-500/80 hover:bg-sky-500 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                    className="btn btn-primary btn-sm ml-auto"
                   >
                     Reserve
                   </button>

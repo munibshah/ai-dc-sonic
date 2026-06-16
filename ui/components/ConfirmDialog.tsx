@@ -52,7 +52,7 @@ export default function ConfirmDialog({
       onClick={busy ? undefined : onCancel}
     >
       <div
-        className="max-w-md w-full rounded-xl border border-white/15 bg-slate-900 p-5 shadow-2xl"
+        className="max-w-md w-full rounded-xl border border-white/15 bg-[var(--surface-canvas-deep)] p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -71,22 +71,14 @@ export default function ConfirmDialog({
           )}
         </div>
         <div className="flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            disabled={busy}
-            className="px-3 py-1.5 rounded border border-white/20 bg-white/5 hover:bg-white/10 text-sm disabled:opacity-50"
-          >
+          <button onClick={onCancel} disabled={busy} className="btn btn-secondary btn-sm">
             {cancelLabel}
           </button>
           <button
             ref={confirmRef}
             onClick={onConfirm}
             disabled={busy}
-            className={`px-4 py-1.5 rounded border text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed ${
-              danger
-                ? "border-rose-400/60 bg-rose-500/20 hover:bg-rose-500/30 text-rose-100"
-                : "border-sky-400/60 bg-sky-500/20 hover:bg-sky-500/30 text-sky-100"
-            }`}
+            className={`btn btn-sm ${danger ? "btn-danger" : "btn-primary"}`}
           >
             {confirmLabel}
           </button>

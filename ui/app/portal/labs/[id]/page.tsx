@@ -168,7 +168,7 @@ export default function LabWorkbenchPage() {
         toasts.push({
           tone: "success",
           title: "Canonical configuration applied",
-          body: "Click Submit ✓ to verify and stamp the lab complete.",
+          body: "Click Submit to verify and stamp the lab complete.",
         });
         fetchDevices().then(setDevices).catch(() => {});
       },

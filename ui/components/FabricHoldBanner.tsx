@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { BOOKING_BASE, holderStatus, type HolderStatus } from "@/lib/booking";
+import { Check, Clock } from "@/components/icons";
 
 function fmtUntil(iso: string | null): string {
   if (!iso) return "";
@@ -46,7 +47,7 @@ export default function FabricHoldBanner() {
   if (status.you_hold) {
     return (
       <div className="rounded-lg border border-emerald-400/40 bg-emerald-500/10 text-emerald-100 px-4 py-2 text-sm flex items-center gap-2">
-        <span aria-hidden>✓</span>
+        <Check className="w-4 h-4 shrink-0" />
         You hold the fabric until {fmtUntil(status.ends_at)}. Start, Reset, and Solve are unlocked.
       </div>
     );
@@ -54,7 +55,7 @@ export default function FabricHoldBanner() {
 
   return (
     <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 text-amber-100 px-4 py-2 text-sm flex flex-wrap items-center gap-x-2 gap-y-1">
-      <span aria-hidden>⏳</span>
+      <Clock className="w-4 h-4 shrink-0" />
       {status.reserved ? (
         <>Fabric reserved by another learner until {fmtUntil(status.ends_at)} — Start/Reset/Solve are locked.</>
       ) : (
