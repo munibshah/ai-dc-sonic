@@ -1,7 +1,5 @@
 # Exercise — Build the EVPN-VXLAN overlay, one piece at a time
 
-> Read [`lab2-overview.md`](lab2-overview.md) first if you haven't.
-
 ## Scenario
 
 The fabric you built in Lab 1 is up. Every leaf can route to every other leaf via two ECMP paths through the spines. That underlay is fine for any L3 service — but the AI team wants a single flat L2 segment that spans all four leaves, so they can plug `gpu1`..`gpu8` into it later and run a Gloo/NCCL collective without any per-host L3 plumbing.
@@ -33,7 +31,7 @@ show vxlan vlanvnimap
 ip -br link show | grep -E 'Vlan|vxlan|vtep'
 ```
 
-Expected: `show vxlan tunnel` says "no entries" or returns empty headers — no VXLAN tunnels configured yet. `ip -br link show` shows no `Vlan*` or `vtep*` devices. **The overlay is purely additive** — you're going to create new SONiC objects, leave the existing underlay alone.
+Expected: `show vxlan tunnel` says "no entries" or returns empty headers — no VXLAN tunnels configured yet. `ip -br link show` shows no `Vlan*` or `vtep*` devices. **The overlay is purely additive** — you're going to create new objects, leave the existing underlay alone.
 
 ### Create the L2 segment, the VTEP, and the EVPN binding — one command at a time
 
@@ -130,7 +128,7 @@ leaf1
         v  VXLAN encap (UDP 4789, VNI 10100)  -->  underlay  -->  remote VTEPs
 ```
 
-That's the whole data-plane setup — five SONiC primitives, five commands. The map is the keystone: it's what turns "a VLAN" and "a tunnel" into "this L2 segment travels the fabric as VNI 10100."
+That's the whole data-plane setup — five commands. The map is the keystone: This is what turns "a VLAN" and "a tunnel" into "this L2 segment travels the fabric as VNI 10100."
 
 > 💡 **What just happened under the hood**: each `config` command wrote an entry to SONiC's `config_db.json`. `swssconfig` picked the entries up and programmed the kernel: a Linux bridge named `Bridge`, a VLAN sub-interface `Vlan1000@Bridge`, and a VXLAN device `vtep-1000`. You can see the kernel objects with `ip -br link show`, and the SONiC view with `show vxlan tunnel`.
 
@@ -138,13 +136,14 @@ That's the whole data-plane setup — five SONiC primitives, five commands. The 
 
 > 💡 **Why `config interface ip add Vlan1000 192.168.100.1/24`?** That's the per-leaf "I'm participating in this segment at this IP" announcement. For our verification ping (leaf-to-leaf), this is the IP we'll send from. In Lab 3, real workers will get IPs in this same 192.168.100.0/24 subnet and reach the leaf as their first hop.
 
-> 💡 **What's an EVPN NVO?** "Network Virtualization Overlay" — the binding object that tells SONiC "this VXLAN tunnel is part of the EVPN signaling plane, so generate Type-2/Type-3 routes for any VNI mapped to it." Without `evpn_nvo`, the tunnel exists but FRR's EVPN AF wouldn't know to advertise anything for it.
+> 💡 **What's an EVPN NVO?** "Network Virtualization Overlay" — the binding object that says "this VXLAN tunnel is part of the EVPN signaling plane, so generate Type-2/Type-3 routes for any VNI mapped to it." Without `evpn_nvo`, the tunnel exists but FRR's EVPN AF wouldn't know to advertise anything for it.
 
 ### Verify
 
 ```sh
 show vxlan tunnel
 show vxlan vlanvnimap
+ip -br link show Vlan1000 
 ip -br link show Vlan1000 vtep-1000
 ip addr show Vlan1000
 ```
@@ -435,7 +434,7 @@ The final check is a leaf-to-leaf ping mesh — every leaf pings every other lea
 
 If everything passes, the lab stamps as **Passed**, the completion screen appears, and the CTA for Lab 3 ("Bring GPUs onto the overlay + first AllReduce") lights up.
 
-If something fails, look at the most-likely-cause table in [`lab2-solution.md`](lab2-solution.md). The four common gotchas, in priority order:
+If something fails, the four common gotchas, in priority order:
 
 1. Mistyped the spine's next-hop knob (e.g. wrote `next-hop-unchanged`, which is rejected by this image's FRR 10.4.1, or `attribute-unchanged next-hop`, which is silently accepted but not persisted into running-config) — overlay still works thanks to FRR's default-preserves behavior, but the line you typed won't show in `vtysh -c "show running-config"`
 2. Forgot `advertise-all-vni` on a leaf → no Type-2/Type-3 routes from that leaf
@@ -446,20 +445,8 @@ If something fails, look at the most-likely-cause table in [`lab2-solution.md`](
 
 ## Stuck? Want to restart?
 
-| You want to… | Click |
-|---|---|
-| See the canonical answer for any step | **Reveal solution** in the top bar |
-| Wire the full overlay end-to-end without typing | **Solve** in the top bar (your run is flagged "solved") |
 | Wipe overlay state + restore healthy underlay | **Reset** in the top bar |
 | Run all checks now | **Submit ✓** in the top bar |
 
-> Your edits live in the running SONiC config_db + FRR daemons. They don't survive a switch container restart — but the orchestrator never restarts switch containers, so you can safely walk away. Close the browser; come back tomorrow; session, lab state, attempts, and last-submit result all persist.
 
 ---
-
-## Where to go next
-
-- [`lab2-solution.md`](lab2-solution.md) — copy-pasteable answer key (5 SONiC CLI commands per leaf + 6 vtysh blocks: 4 leaves activating EVPN with `advertise-all-vni` + 2 spines activating EVPN with just `activate` — FRR preserves EVPN next-hops by default) + common-mistakes troubleshooter
-- [`../topology.md`](../topology.md) — full IP / link / BGP reference
-- [`../switch-cli-reference.md`](../switch-cli-reference.md) — SONiC + vtysh CLI cheat sheet
-- [`../../notes/decisions.md`](../../notes/decisions.md) — ADR-002 (the textbook shared-spine-AS EVPN gotcha + the empirical finding that FRR preserves L2VPN-EVPN next-hops by default), ADR-005 (why one stretched L2 segment is the right shape for an AI fabric), ADR-008 (why we use `config vxlan` for L2/VXLAN but `vtysh` for BGP), and ADR-011 (upgrading to `aidc/sonic-vs:202511` / FRR 10.4.1)
