@@ -8,7 +8,7 @@ To deliver that single-segment illusion on top of an L3 fabric, you need an **ov
 
 That's what you'll build, **using SONiC's native CLI** the way you would on a real production switch.
 
-By the end of this lab, every leaf will share one stretched L2 segment (VLAN 1000 / VNI 10100 / subnet 192.168.100.0/24) with every other leaf, you'll see Type-2 MAC routes flowing through your spines, and a ping from leaf1 to leaf3 will ride a real VXLAN tunnel through the underlay you just built.
+By the end of this lab, every leaf will share one stretched L2 segment (VLAN 1000 / VNI 10100 / subnet 192.168.100.0/24) with every other leaf, you'll see Type-3 (inclusive-multicast) EVPN routes flowing through your spines to build a fabric-wide flood list, and a ping from leaf1 to leaf3 will ride a real VXLAN tunnel through the underlay you just built. (Type-2 MAC routes — the per-host bindings — arrive in Lab 3, once real GPU workers put MACs on this segment.)
 
 > **Note**: Lab 2 is leaf-only. You'll set up the overlay on the four leaves and verify it with leaf-to-leaf ping. Bringing `gpu1`..`gpu8` onto the overlay segment (and running an actual AllReduce across it) is Lab 3.
 
@@ -37,7 +37,7 @@ Concepts, not CLI flags:
 - **VTEP** — the VXLAN tunnel endpoint, why it's a loopback (not a fabric link), and how the existing `10.0.10.X/32` addresses you saw in Lab 1 become load-bearing now
 - **VLAN ↔ VNI mapping** — SONiC's data model for "this L2 segment is VLAN 1000 locally and VNI 10100 over the wire"
 - **EVPN NVO** — why this extra binding object exists (it's how SONiC knows which VTEP a VNI should ride)
-- **BGP L2VPN-EVPN address family** — the same BGP you already speak, with two new route types: Type-2 (MAC) and Type-3 (inclusive multicast)
+- **BGP L2VPN-EVPN address family** — the same BGP you already speak, with two new route types: Type-2 (MAC) and Type-3 (inclusive multicast). This lab generates **Type-3** only (it builds the BUM flood list); Type-2 routes start flowing in Lab 3 when hosts with real MACs join the segment
 - **`advertise-all-vni`** — how FRR auto-discovers SONiC's VXLAN devices and originates routes for them
 - **The textbook shared-AS-spine EVPN gotcha** — and the empirical reality that FRR (both 7.5.1 and 10.4.1 in this lab's images) preserves L2VPN-EVPN next-hops on eBGP peers by default (no spine-side knob is needed or even works in this build; on a future FRR where the default changes you'd add `neighbor LEAVES next-hop-unchanged` or `attribute-unchanged next-hop` as defense-in-depth). ADR-002 captures the finding.
 - **What `config` writes to vs what `vtysh` configures** — the two CLI surfaces, where they overlap, and where they don't
@@ -102,7 +102,7 @@ Then for each spine:
 
 Then verify:
 
-6. On leaf1: `show bgp l2vpn evpn summary` (both spines Established), `show bgp l2vpn evpn` (Type-2 routes from leaf2/3/4 visible), `vtysh -c "show evpn vni 10100"` (FRR's "Remote VTEPs for this VNI" lists the other VTEPs with `flood: HER`).
+6. On leaf1: `show bgp l2vpn evpn summary` (both spines Established), `show bgp l2vpn evpn` (Type-3 inclusive-multicast routes from leaf2/3/4 visible — no Type-2 yet, that's Lab 3), `vtysh -c "show evpn vni 10100"` (FRR's "Remote VTEPs for this VNI" lists the other VTEPs with `flood: HER`).
 7. **First overlay packet**: `ping -I Vlan1000 192.168.100.3` from leaf1. Success.
 8. Inline **Check ▸** after each verification step; **Submit ✓** when done.
 

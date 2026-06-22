@@ -4,7 +4,7 @@
 
 The fabric you built in Lab 1 is up. Every leaf can route to every other leaf via two ECMP paths through the spines. That underlay is fine for any L3 service — but the AI team wants a single flat L2 segment that spans all four leaves, so they can plug `gpu1`..`gpu8` into it later and run a Gloo/NCCL collective without any per-host L3 plumbing.
 
-Your job: add an **EVPN-VXLAN overlay** on top of the underlay. You'll set up the L2 segment on each leaf using **SONiC's native CLI** (`config vlan`, `config vxlan`), activate the BGP L2VPN-EVPN address family on every device with `vtysh`, watch Type-2 MAC routes propagate through the spines, and end with a ping that rides a real VXLAN tunnel from `leaf1` to `leaf3`.
+Your job: add an **EVPN-VXLAN overlay** on top of the underlay. You'll set up the L2 segment on each leaf using **SONiC's native CLI** (`config vlan`, `config vxlan`), activate the BGP L2VPN-EVPN address family on every device with `vtysh`, watch **Type-3 (inclusive-multicast) routes** propagate through the spines to build the flood list, and end with a ping that rides a real VXLAN tunnel from `leaf1` to `leaf3`. (Type-2 MAC routes come in Lab 3, once real GPU hosts put MACs on this segment.)
 
 You'll build the **leaves first** (so each leaf has something to advertise), then the **spines** (so the leaves' routes can actually traverse the fabric), then verify and ping.
 
@@ -17,9 +17,9 @@ EVPN-VXLAN gives you both:
 - **L3 everywhere** in the underlay (ECMP, fast convergence, scalable to thousands of switches)
 - **L2 where it matters** in the overlay (the GPUs see one flat wire, ARP works, the rendezvous protocol works, NCCL's optimized comms work)
 
-This pattern is what every hyperscale AI fabric runs — Microsoft, Meta, Google internal, AWS HyperPod. Same control plane, same data plane, just at thousand-switch scale instead of six.
+This pattern is what every hyperscale AI fabric runs. Same control plane, same data plane, just at thousand-switch scale.
 
-## Step 1: Bring up the L2 segment on `leaf1` (via SONiC CLI)
+## Step 1: Bring up the L2 segment on `leaf1` 
 
 Click **Topology** → `leaf1`. New terminal tab.
 
@@ -31,7 +31,8 @@ show vxlan vlanvnimap
 ip -br link show | grep -E 'Vlan|vxlan|vtep'
 ```
 
-Expected: `show vxlan tunnel` says "no entries" or returns empty headers — no VXLAN tunnels configured yet. `ip -br link show` shows no `Vlan*` or `vtep*` devices. **The overlay is purely additive** — you're going to create new objects, leave the existing underlay alone.
+Expected: `show vxlan tunnel` says "no entries" or returns empty headers — no VXLAN tunnels configured yet. `ip -br link show | grep -E 'Vlan|vxlan|vtep'
+` shows no `Vlan*` or `vtep*` devices. **The overlay is purely additive** — you're going to create new objects, leave the existing underlay alone.
 
 ### Create the L2 segment, the VTEP, and the EVPN binding — one command at a time
 
@@ -103,7 +104,21 @@ config vxlan evpn_nvo add nvo1 vtep
   +-------------------------------------------+
 ```
 
-`evpn_nvo` is the flag that says "generate BGP L2VPN-EVPN routes for whatever rides this tunnel." Without it the tunnel exists but BGP never advertises it.
+**Read the arguments carefully — this is where the wiring happens, and it's easy to miss:**
+
+```
+config vxlan evpn_nvo add  nvo1   vtep
+                    │       │      └── the VTEP to attach to — the *name* of the tunnel
+                    │       │          you created in step 3, NOT the generic word "vtep"
+                    │       └───────── the NVO object's name (arbitrary; "nvo1" by convention)
+                    └───────────────── create an EVPN-NVO binding
+```
+
+Here's the subtlety: back in step 3 you ran `config vxlan add **vtep** 10.0.10.1`. That first argument — `vtep` — wasn't the keyword "VTEP", it was the **name** you gave this leaf's VXLAN tunnel object. (SONiC lets you call it anything; this lab names it `vtep` on every leaf for consistency, which is why the word appears to repeat.) So when you now type `... add nvo1 vtep`, that trailing `vtep` is a **reference back to that named tunnel** — it's the literal string that connects `nvo1` to the endpoint you built one step ago.
+
+In other words: step 3 created a tunnel *named* `vtep`; step 4 creates an NVO *named* `nvo1` and points it at the tunnel named `vtep`. Same object, referenced by name. If you'd named the tunnel `myvtep` in step 3, this command would read `config vxlan evpn_nvo add nvo1 myvtep`.
+
+`evpn_nvo` is the flag that says "generate BGP L2VPN-EVPN routes for whatever rides this tunnel." Without it the tunnel exists but BGP never advertises it. (The kernel device only takes its display name `vtep-1000` once you add the VLAN↔VNI map in step 5 — `vtep` is the SONiC object name, `vtep-1000` is the resulting Linux netdev.)
 
 **5. Map the VLAN onto the tunnel (VLAN 1000 ⇄ VNI 10100).**
 
@@ -132,7 +147,7 @@ That's the whole data-plane setup — five commands. The map is the keystone: Th
 
 > 💡 **What just happened under the hood**: each `config` command wrote an entry to SONiC's `config_db.json`. `swssconfig` picked the entries up and programmed the kernel: a Linux bridge named `Bridge`, a VLAN sub-interface `Vlan1000@Bridge`, and a VXLAN device `vtep-1000`. You can see the kernel objects with `ip -br link show`, and the SONiC view with `show vxlan tunnel`.
 
-> 💡 **Why a VLAN, not just a VXLAN device?** SONiC's data model says: a VLAN is the L2 segment, a VXLAN tunnel is the encap endpoint, and a `map` entry connects "VLAN 1000 here ↔ VNI 10100 over the wire." This factoring lets one VXLAN tunnel carry many VLANs (with one map entry each). At hyperscale that matters — you don't want one VXLAN device per tenant per leaf.
+> 💡 **Why a VLAN, not just a VXLAN device?** SONiC's data model says: a VLAN is the L2 segment, a VXLAN tunnel is the encap endpoint, and a `map` entry connects "VLAN 1000 here ↔ VNI 10100 over the wire." This factoring lets one VXLAN tunnel carry many VLANs (with one map entry each). 
 
 > 💡 **Why `config interface ip add Vlan1000 192.168.100.1/24`?** That's the per-leaf "I'm participating in this segment at this IP" announcement. For our verification ping (leaf-to-leaf), this is the IP we'll send from. In Lab 3, real workers will get IPs in this same 192.168.100.0/24 subnet and reach the leaf as their first hop.
 
@@ -144,7 +159,7 @@ That's the whole data-plane setup — five commands. The map is the keystone: Th
 show vxlan tunnel
 show vxlan vlanvnimap
 ip -br link show Vlan1000 
-ip -br link show Vlan1000 vtep-1000
+ip -br link show vtep-1000
 ip addr show Vlan1000
 ```
 
@@ -213,7 +228,7 @@ end
 
 > 💡 **Why a separate address family?** BGP carries different route types in different address families — IPv4 unicast for L3 prefixes (what you set up in Lab 1), IPv6 unicast, VPNv4 for MPLS L3VPN, **L2VPN-EVPN** for our overlay. Each AF has its own set of routes per neighbor. Same TCP session, same neighbor, different route table.
 
-> 💡 **Why `vtysh` here instead of `config bgp`?** Modern SONiC's `config bgp` CLI is intentionally minimal — only `device-global`, `remove`, `shutdown`, `startup`. The full neighbor / address-family lifecycle isn't surfaced through it; production SONiC operators drive BGP through the `BGP_GLOBALS*` config_db tables (or YANG/mgmtd in newer builds), and `vtysh` for interactive work. We use `vtysh` here for the same reason a SONiC engineer would: it's the direct interactive surface. See [ADR-008](../../notes/decisions.md) and [ADR-011](../../notes/decisions.md) for the history.
+> 💡 **Why `vtysh` here instead of `config bgp`?** Modern SONiC's `config bgp` CLI is intentionally minimal — only `device-global`, `remove`, `shutdown`, `startup`. The full neighbor / address-family lifecycle isn't surfaced through it; production SONiC operators drive BGP through the `BGP_GLOBALS*` config_db tables (or YANG/mgmtd in newer builds), and `vtysh` for interactive work. 
 
 > 💡 **What does `advertise-all-vni` actually do?** It tells FRR: "scan the kernel for VXLAN devices, and for every VNI you find, originate Type-3 (inclusive multicast) routes immediately, and Type-2 (MAC) routes for any MAC that lands in the bridge fdb." This is why you set up the kernel devs *first* — `advertise-all-vni` is a **discovery** mechanism, not a creation one.
 
@@ -225,7 +240,22 @@ Quick sanity check on leaf1:
 show evpn vni
 ```
 
-Expected: a single line for VNI 10100, bound to `vtep-1000`, Local VTEP IP `10.0.10.1`. **This is the proof that FRR found the SONiC-created VXLAN device** — without it, EVPN would have nothing to advertise.
+Expected — a single summary row for your VNI:
+
+```
+VNI        Type VxLAN IF              # MACs   # ARPs   # Remote VTEPs  Tenant VRF
+10100      L2   vtep-1000             0        0        0               default
+```
+
+Read the row left to right — every column is a checkpoint that one earlier step worked:
+
+- **`VNI 10100`** — the VNI you created in step 5's `config vxlan map add vtep 1000 10100`. If this line is missing entirely, FRR never discovered a VXLAN device → `advertise-all-vni` had nothing to scan, which usually means the map command didn't land.
+- **`Type L2`** — a layer-2 VNI (a bridged segment), as opposed to an `L3` VNI used for symmetric IRB routing. Ours is pure L2 — one flat wire across the leaves — so `L2` is exactly right.
+- **`VxLAN IF: vtep-1000`** — **this is the load-bearing column.** It's the proof that FRR reached into the kernel, found the SONiC-programmed `vtep-1000` netdev, and bound its EVPN instance to it. The whole reason you built the kernel devices *before* turning on the EVPN address family is so this discovery succeeds. If this said `<none>` or the row was absent, EVPN would have nothing to advertise.
+- **`# MACs 0`** — **and it stays 0 for this entire lab — that's expected, not a bug.** A VNI's MAC count is the number of *host* MACs on the segment, and right now nothing is plugged into VLAN 1000 except the leaf's own SVI. FRR does **not** advertise the SVI's gateway MAC by default (you can confirm with `show evpn vni 10100`: `Advertise-svi-macip: No`), so it contributes no MAC. With zero host MACs, FRR has nothing to originate a **Type-2 (MAC) route** for — so in Lab 2 you'll only ever see **Type-3 (inclusive-multicast)** routes. Type-2 routes are a **Lab 3** phenomenon: when the GPU workers attach real NICs to this segment, their MACs land in the bridge fdb and *then* the count climbs and Type-2 routes flow.
+- **`# Remote VTEPs 0`** — **expected to be 0 right now, and that's not a bug either.** You've only configured the *leaves*; the spines aren't transiting L2VPN-EVPN routes yet (that's the very next step). With no path for the other leaves' Type-3 routes to reach leaf1, leaf1 knows of zero remote VTEPs. After you activate the spines in Step 4 and the overlay converges, this column becomes **3** (leaf2/leaf3/leaf4) — and the [later verify](#step-6-verify-the-data-plane) re-runs `show evpn vni 10100` to confirm it.
+
+So at this stage a healthy leaf shows: the VNI present, bound to `vtep-1000`, zero MACs, zero remote VTEPs. That's "the leaf is ready to advertise" — the fabric-wide convergence comes after the spines are in.
 
 ---
 
@@ -246,24 +276,22 @@ end
 
 Same block on `spine2`. That's it — just one line per spine (`neighbor LEAVES activate`). The conceptual callout is below, and it's important.
 
-> 💡 **The shared-AS-spine EVPN next-hop concern — and how FRR quietly handles it for us**:
+> 💡 **The shared-AS-spine EVPN next-hop concern — and how FRR handles **:
 >
-> The textbook concern: in a shared-AS-spine CLOS, when a spine relays a Type-2 route from leaf1 to leaf3, standard eBGP behavior says "rewrite the next-hop to me before forwarding." Walked through that failure mode:
+> In a shared-AS-spine CLOS, when a spine relays an EVPN route from leaf1 to leaf3, standard eBGP behavior says "rewrite the next-hop to me before forwarding." In this lab the route in question is the **Type-3 (inclusive-multicast)** route — but the concern is identical for the Type-2 MAC routes you'll meet in Lab 3, since both carry the originating leaf's VTEP as their next-hop.
 >
-> 1. leaf1 originates a Type-2 route for some MAC behind its VTEP `10.0.10.1`. The route's next-hop = `10.0.10.1`.
+> 1. leaf1 originates a Type-3 route for its VTEP `10.0.10.1`. The route's next-hop = `10.0.10.1`.
 > 2. spine1 receives it. If it applies the default next-hop-self rewrite, the next-hop becomes `10.0.0.1` (spine1's router-id).
-> 3. spine1 advertises to leaf3 with next-hop `10.0.0.1`. leaf3 programs its bridge fdb: "VXLAN-tunnel to `10.0.0.1`."
+> 3. spine1 advertises to leaf3 with next-hop `10.0.0.1`. leaf3 adds `10.0.0.1` to its head-end-replication flood list: "BUM-flood to a VTEP at `10.0.0.1`."
 > 4. **`10.0.0.1` is not a VTEP** — it's spine1's router-id loopback. spine1 has no VXLAN device, no UDP 4789 listener.
-> 5. Frame arrives at spine1, kernel drops it silently. Ping fails. Routes look right. Nothing in logs.
+> 5. Flooded frames arrive at spine1 and are dropped silently. The overlay fails even though the routes look right.
 >
-> **In FRR, that rewrite does not fire** for L2VPN-EVPN routes on eBGP peers — FRR preserves the original VTEP next-hop by default. Verified empirically on this image (FRR 10.4.1): `vtysh -c "show bgp l2vpn evpn"` on leaf3 shows next-hops like `10.0.10.1(spine1)` (= leaf1's VTEP, learned via spine1), not `10.0.0.1`. The data-plane gotcha doesn't bite here.
+> **In FRR, that rewrite does not fire** for L2VPN-EVPN routes on eBGP peers — FRR preserves the original VTEP next-hop by default on this image (FRR 10.4.1): `vtysh -c "show bgp l2vpn evpn"` on leaf3 shows next-hops like `10.0.10.1(spine1)` (= leaf1's VTEP, learned via spine1), not `10.0.0.1`. 
 >
-> **Should you still add an explicit knob?** In production templates, yes — defense-in-depth, makes the intent visible to the next operator, protects against future defaults changing. The relevant commands depending on FRR version:
+> **Should you still add an explicit knob?** In production templates, you should add an explicit knob to not change the next hop for. The relevant commands depending on FRR version:
 > - **FRR 8.x+** (and possibly future FRR): `neighbor LEAVES next-hop-unchanged`
 > - **FRR 7.x**: `neighbor LEAVES attribute-unchanged next-hop`
-> - **In *this* sonic-vs build (FRR 10.4.1)**, neither knob has a visible effect — `next-hop-unchanged` returns `% Unknown command`, and `attribute-unchanged next-hop` is silently accepted but not persisted into `show running-config`. There's no working spine-side knob in this image; the FRR default is the only mechanism. We leave the spine config as just `activate` and rely on it.
->
-> **Always verify a config push actually loaded** with `vtysh -c "show running-config"`. `vtysh -b` (the boot-time parser) eats unknown or no-op commands without warning.
+> - **In *this* sonic-vs build (FRR 10.4.1)**, There's no working spine-side knob in this image; the FRR default is the only mechanism. We leave the spine config as just `activate`
 
 After both spines are activated:
 
@@ -283,11 +311,11 @@ Expected: two rows, one per spine, both with int PfxRcd ≥ 1.
 
 ```
 Neighbor          V    AS     ...  State/PfxRcd
-spine1(10.1.1.0)  4   65000   ...  6
-spine2(10.1.2.0)  4   65000   ...  6
+spine1(10.1.1.0)  4   65000   ...  3
+spine2(10.1.2.0)  4   65000   ...  3
 ```
 
-(Exact PfxRcd varies — typically ~3-6 depending on RD/RT auto-derivation; the important bit is it's an int, not `Active` or `Idle`.)
+(Exact PfxRcd varies — typically ~3 here, one Type-3 route per *other* leaf, relayed by each spine; it climbs in Lab 3 once Type-2 MAC routes join. The important bit is it's an int, not `Active` or `Idle`.)
 
 Then look at the actual routes:
 
@@ -295,27 +323,23 @@ Then look at the actual routes:
 show bgp l2vpn evpn
 ```
 
-Expected: a multi-RD listing with Type-2 (MAC) and Type-3 (inclusive multicast) routes from every other leaf's VTEP (`10.0.10.2`, `10.0.10.3`, `10.0.10.4`).
-
-Type-2 routes look like:
+Expected: a multi-RD listing of **Type-3 (inclusive-multicast) routes** — one per VTEP, including one from each other leaf (`10.0.10.2`, `10.0.10.3`, `10.0.10.4`) plus your own (`10.0.10.1`). Each remote one is learned via **both** spines (you'll see two paths, `*>` best and `*=` equal):
 
 ```
-*> [2]:[0]:[0]:[48]:[<some_mac>]
-                    10.0.10.2                                    0 65000 65102 i
+Route Distinguisher: 10.0.1.2:2
+ *>  [3]:[0]:[32]:[10.0.10.2]
+                    10.0.10.2(spine1)                            0 65000 65102 i
+ *=  [3]:[0]:[32]:[10.0.10.2]
+                    10.0.10.2(spine2)                            0 65000 65102 i
 ```
 
-Type-3 (inclusive multicast — how the bridge knows to head-end-replicate BUM traffic) look like:
+The prefix `[3]:[0]:[32]:[10.0.10.2]` reads as `<RouteType>:<EthTag>:<IP-len>:<originating-VTEP-IP>` — leaf2 announcing "I'm a VTEP for this VNI; head-end-replicate BUM traffic to me at 10.0.10.2." That's what builds the flood list you'll see in the data plane.
 
-```
-*> [3]:[0]:[32]:[10.0.10.2]
-                    10.0.10.2                                    0 65000 65102 i
-```
+> **Heads-up — you will NOT see any Type-2 (MAC) routes in this lab, and that's correct.** Type-2 routes carry *host* MAC (and MAC/IP) bindings, and there are no hosts on this segment yet — just the four leaf SVIs, whose gateway MACs FRR doesn't advertise by default (`show evpn vni 10100` → `Advertise-svi-macip: No`). With nothing to bind, FRR originates only Type-3. **Type-2 routes arrive in Lab 3**, when the GPU workers attach real NICs and their MACs land in the bridge fdb. So your leaf-to-leaf ping in this lab rides pure **BUM flooding** over the Type-3 flood list — not MAC-route forwarding.
 
-Three remote VTEPs visible in the next-hop column:
+<checkpoint name="evpn_routes_learned" label="Leaf1 learned each leaf's EVPN (Type-3) route" />
 
-<checkpoint name="type2_routes_present" label="Leaf1 sees Type-2 MAC routes from all VTEPs" />
-
-> 💡 **Walking the route format**: `[2]:[0]:[0]:[48]:[mac]` reads as `<RouteType>:<EthernetTag>:<MAC-IP-encoding>:<MAC-len-in-bits>:<MAC>`. Type-2 routes are the heart of EVPN's L2 plane — for every MAC the kernel learns on a VXLAN-attached bridge, FRR originates one of these to every EVPN peer. At hyperscale (thousands of MACs per leaf, thousands of leaves), this becomes a **lot** of routes; production fabrics tune RT filtering to cut the per-leaf import set.
+> 💡 **Walking the route format, and why Type-3 is enough here**: `[3]:[0]:[32]:[10.0.10.2]` is an *Inclusive Multicast Ethernet Tag* route — EVPN's "I am a VTEP for this VNI" announcement. Every leaf originates exactly one per VNI; together they tell each leaf the full set of remote VTEPs to head-end-replicate broadcast/unknown-unicast/multicast (BUM) traffic to. That single mechanism is enough to make ARP — and therefore a first ping — work across the fabric, with **zero** Type-2 routes. When you reach Lab 3, watch this same `show bgp l2vpn evpn` output sprout `[2]:...:[48]:[mac]` Type-2 entries as the workers come up — at hyperscale (thousands of MACs × thousands of leaves) those become the dominant route population, and production fabrics tune RT filtering to cut the per-leaf import set.
 
 ---
 
@@ -334,10 +358,12 @@ Expected: three rows, one per remote leaf's VTEP IP. `Creation Source: EVPN` con
 ```
 SIP         DIP        Creation Source    OperStatus
 ----------  ---------  -----------------  ------------
-10.0.10.1   10.0.10.2  EVPN               oper_up
-10.0.10.1   10.0.10.3  EVPN               oper_up
-10.0.10.1   10.0.10.4  EVPN               oper_up
+10.0.10.1   10.0.10.2  EVPN               oper_down
+10.0.10.1   10.0.10.3  EVPN               oper_down
+10.0.10.1   10.0.10.4  EVPN               oper_down
 ```
+
+> ⚠️ **`oper_down` here is expected on this virtual fabric — it does *not* mean the overlay is broken.** The column you care about is **`Creation Source: EVPN`** (the tunnels were learned via BGP, exactly as intended) and the fact that all three remote VTEPs are listed at all. `OperStatus` is set by SONiC's tunnel monitor, which tracks the *simulated ASIC* dataplane — and in the `sonic-vs` image that monitor never goes "up." But the traffic in this lab is forwarded by the **Linux-kernel** VXLAN device `vtep-1000`, which is fully operational. The authoritative proof the overlay works is Option B below (FRR's view), the kernel flood list (`bridge fdb show dev vtep-1000` — one `00:00:00:00:00:00 → <remote VTEP>` entry per leaf), and the ping in Step 7. On real hardware this column reads `oper_up`; on the emulator, trust the kernel and the ping, not `OperStatus`.
 
 ### Option B — FRR view (still in vtysh):
 
@@ -356,11 +382,15 @@ VNI: 10100
   10.0.10.4 flood: HER
   10.0.10.2 flood: HER
   10.0.10.3 flood: HER
- Number of MACs (local and remote) known for this VNI: 1
+ Number of MACs (local and remote) known for this VNI: 0
  Number of ARPs (IPv4 and IPv6, local and remote) known for this VNI: 3
+ Advertise-gw-macip: No
+ Advertise-svi-macip: No
 ```
 
-The three `flood: HER` lines are the **head-end-replication targets** populated from the Type-3 inclusive-multicast routes EVPN exchanged — they tell the kernel "when you need to BUM-flood, send one copy to each of these VTEPs."
+The three `flood: HER` lines are the **head-end-replication targets** populated from the Type-3 inclusive-multicast routes EVPN exchanged — they tell the kernel "when you need to BUM-flood in VXLAN 10100, send one copy to each of these VTEPs." This is the FRR view of the same three VTEPs Option A showed — and unlike `show vxlan remotevtep`'s `OperStatus`, it reflects the working control + kernel data plane, which is why it's the view to trust on this emulator.
+
+Note **`Number of MACs ... : 0`** — no Type-2 MAC routes exist in this lab (no host MACs on the segment yet; `Advertise-svi-macip: No` means the SVI MAC isn't advertised). The `# ARPs: 3` are just leaf1's local neighbor-cache entries for the other SVIs, learned during the ping — not advertised routes. Both counts grow in Lab 3 when real workers join.
 
 Here's the overlay you just signaled into existence. From `leaf1`'s VTEP, EVPN learned the three remote VTEPs and wired a head-end-replication target for each:
 
@@ -417,10 +447,10 @@ PING 192.168.100.3 (192.168.100.3) from 192.168.100.1 Vlan1000: 56(84) bytes of 
 > 2. The bridge needs to know the destination MAC. Sends an ARP-who-has for `192.168.100.3`. Since the bridge has no entry yet for that MAC, the ARP is BUM-flooded.
 > 3. BUM flooding looks at the head-end-replication list (those entries from the Type-3 routes). One copy of the ARP request is encap'd in a VXLAN packet for each remote VTEP.
 > 4. The underlay routes those VXLAN packets to each VTEP. `leaf3` decap's its copy, sees an ARP for `192.168.100.3` which is its own `Vlan1000` IP, responds.
-> 5. The ARP reply comes back encap'd from `leaf3`'s VTEP to `leaf1`'s VTEP. The underlay routes it. `leaf1` decap's, learns `192.168.100.3`'s MAC, and originates a Type-2 route for `192.168.100.3`'s IP-MAC binding.
-> 6. Subsequent ICMP packets find a unicast fdb entry, get VXLAN-encap'd directly to `leaf3`'s VTEP, no flooding.
+> 5. The ARP reply comes back encap'd from `leaf3`'s VTEP to `leaf1`'s VTEP (leaf3 floods it the same way — it has no MAC route for leaf1 either). `leaf1` decap's and populates its **ARP/neighbor cache** (`192.168.100.3` → leaf3's SVI MAC). Note what it does **not** do: the VXLAN device is created `nolearning` and there's no Type-2 MAC route, so leaf1 installs **no MAC→VTEP fdb entry** for leaf3.
+> 6. So every subsequent ICMP packet is **also** BUM-flooded to all three remote VTEPs — only `leaf3` keeps it, `leaf2`/`leaf4` drop it. Wasteful, but perfectly correct at this scale (4 leaves, one host each). **This is exactly the inefficiency Type-2 MAC routes fix** — in Lab 3 the GPU workers' MACs get advertised as Type-2, which installs precise unicast MAC→VTEP fdb entries so each frame is delivered to *one* VTEP instead of flooded to all. Watch the fdb change there with `bridge fdb show dev vtep-1000`.
 >
-> **One ping = one full control-plane + data-plane cycle. The overlay is live.**
+> **One ping = one full control-plane (Type-3 flood-list) + data-plane (BUM flood) cycle. The overlay is live — flooding now, unicast-precise once Lab 3 adds Type-2.**
 
 ---
 
@@ -437,7 +467,7 @@ If everything passes, the lab stamps as **Passed**, the completion screen appear
 If something fails, the four common gotchas, in priority order:
 
 1. Mistyped the spine's next-hop knob (e.g. wrote `next-hop-unchanged`, which is rejected by this image's FRR 10.4.1, or `attribute-unchanged next-hop`, which is silently accepted but not persisted into running-config) — overlay still works thanks to FRR's default-preserves behavior, but the line you typed won't show in `vtysh -c "show running-config"`
-2. Forgot `advertise-all-vni` on a leaf → no Type-2/Type-3 routes from that leaf
+2. Forgot `advertise-all-vni` on a leaf → no Type-3 route from that leaf, so it's left off every other leaf's flood list and is cut out of the overlay
 3. Forgot `config vxlan evpn_nvo add` on a leaf → tunnel exists but EVPN doesn't see it
 4. Mismatched VNI or VLAN across leaves → tunnels build but frames are dropped at decap
 

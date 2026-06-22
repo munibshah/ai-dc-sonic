@@ -132,8 +132,16 @@ def _check_evpn_neighbors_up():
     return True, "all 8 leaf↔spine EVPN sessions Established", None
 
 
-def _check_type2_routes_present():
-    """leaf1's EVPN table contains MAC routes from each of the other 3 leaves' VTEPs."""
+def _check_evpn_routes_learned():
+    """leaf1's EVPN table contains each other leaf's VTEP route.
+
+    In this lab those are Type-3 (inclusive-multicast) routes — one per VTEP —
+    which build the BUM flood list. There are deliberately NO Type-2 (MAC)
+    routes: the segment has no host MACs yet (just SVIs, and the SVI MAC isn't
+    advertised), so FRR originates only Type-3. Type-2 routes arrive in Lab 3
+    when the GPU workers attach. Matching on the VTEP IP catches the Type-3
+    route (the VTEP IP is its NLRI key and its next-hop).
+    """
     out = vtysh("leaf1", "show bgp l2vpn evpn")
     if not out:
         return False, "leaf1: `show bgp l2vpn evpn` returned nothing", None
@@ -142,7 +150,7 @@ def _check_type2_routes_present():
     missing = [ip for ip, ok in seen.items() if not ok]
     if missing:
         return False, f"leaf1 missing EVPN routes from VTEPs: {', '.join(missing)}", out[:600]
-    return True, "leaf1 sees Type-2/Type-3 routes from leaf2, leaf3, leaf4", None
+    return True, "leaf1 sees Type-3 (IMET) routes from leaf2, leaf3, leaf4", None
 
 
 def _check_remote_vteps_learned():
@@ -203,7 +211,7 @@ def _check_overlay_full_mesh():
 CHECKPOINTS: list[tuple[str, str, callable]] = [
     ("bridges_up",             "VLAN + VXLAN tunnel up on every leaf",        _check_bridges_up),
     ("evpn_neighbors_up",      "BGP EVPN sessions Established (leaf↔spine)",  _check_evpn_neighbors_up),
-    ("type2_routes_present",   "Leaf1 sees Type-2 MAC routes from all VTEPs", _check_type2_routes_present),
+    ("evpn_routes_learned",    "Leaf1 learned each leaf's EVPN (Type-3) route", _check_evpn_routes_learned),
     ("remote_vteps_learned",   "Remote VTEPs visible to leaf1",               _check_remote_vteps_learned),
     ("overlay_ping_pair",      "Leaf1 → Leaf3 overlay ping (first packet)",   _check_overlay_ping_pair),
     ("overlay_full_mesh",      "12/12 leaf-to-leaf overlay pings",            _check_overlay_full_mesh),

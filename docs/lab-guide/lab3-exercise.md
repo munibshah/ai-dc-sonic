@@ -1,7 +1,5 @@
 # Exercise — Bring the GPUs onto the overlay and run AllReduce
 
-> Read [`lab3-overview.md`](lab3-overview.md) first if you haven't.
-
 ## Scenario
 
 The fabric you finished Lab 2 with is up:
@@ -22,16 +20,6 @@ Distributed training is full of operations that hate L3:
 
 Production AI pods solve this by putting every GPU in one stretched L2 segment, exactly like the one you built in Lab 2 — but for that pattern to actually deliver value, **the GPUs have to be in the segment, not on per-leaf /31 links to the segment's edge**. That's what this lab fixes.
 
-### Get to the starting line
-
-Click **Start lab ▶** in the top bar. The orchestrator:
-
-1. Applies the Lab 2 canonical overlay config to every switch (so you start from a known-good overlay state).
-2. Resets every worker's `eth1` back to its Lab 1 `/31` underlay IP + default route to its leaf.
-3. Delivers `/opt/aidc/allreduce.py` onto every worker (so you can run AllReduce without typing the script by hand).
-
-Within ~30 seconds the lab status pill flips to `In progress`. You're starting from "Lab 2 finished, workers still on underlay." Open the **Topology** button or click **+** in the terminals pane to open any device's console.
-
 ---
 
 ## Step 1: Attach `leaf1`'s worker-facing ports to VLAN 1000
@@ -41,9 +29,9 @@ Click **Topology** → `leaf1`. New terminal tab.
 ### Look at what's there
 
 ```sh
-ip -br link show eth3 eth4
+ip -br link show | grep eth
 bridge vlan show
-ip -br -4 addr show eth3 eth4
+ip -br -4 addr show | grep eth
 ```
 
 Expected: `eth3` and `eth4` are `UP`, carry the Lab 1 underlay `/31` IPs (`10.2.1.0/31` on eth3, `10.2.1.2/31` on eth4), and are not yet members of any bridge. `bridge vlan show` shows only the leaf-side overlay devices (`Bridge`, `Vlan1000`, `vtep-1000`) — the worker ports aren't in it yet.
@@ -105,6 +93,8 @@ vtep-1000         1000
 
 > 💡 **Don't run the checkpoint yet** — `leaf_bridge_members` checks *all four leaves*, and only leaf1 has its worker ports attached so far. Click it after Step 2.
 
+> 💡 **The leaves' frr.conf still has `ip address 10.2.1.0/31` on `eth3`** even though you flushed it at the kernel level. FRR will not re-add it to a bridge slave (zebra is smart about this), so the line in the boot-time config is now stale and can be ignored. The lab's canonical Lab 3 frr.conf — the one **Solve** applies — deletes those `ip address` lines entirely; that's exactly what you'd commit in a production change.
+
 ---
 
 ## Step 2: Repeat on `leaf2`, `leaf3`, `leaf4`
@@ -128,7 +118,6 @@ After all four leaves are done:
 
 <checkpoint name="leaf_bridge_members" label="Leaves attach worker ports (eth3+eth4) to VLAN 1000 bridge" />
 
-> 💡 **The leaves' frr.conf still has `ip address 10.2.1.0/31` on `eth3`** even though you flushed it at the kernel level. FRR will not re-add it to a bridge slave (zebra is smart about this), but the line in the boot-time config is now stale. The lab's canonical Lab 3 frr.conf (the one **Solve** applies) deletes those `ip address` lines entirely — that's what you'd commit in a production change.
 
 ---
 
@@ -147,7 +136,14 @@ The leaves are ready. Now do the same on the workers — each one needs to drop 
 | gpu7 | 192.168.100.17/24 |
 | gpu8 | 192.168.100.18/24 |
 
-For each worker, open its console and run four commands. Example for `gpu1`:
+For each worker, open its console and look at what's there
+
+```sh
+ip -br link show | grep eth
+ip -br -4 addr show | grep eth
+```
+
+Run four commands. Example for `gpu1`:
 
 ```sh
 ip addr flush dev eth1
@@ -178,11 +174,11 @@ eth1  UP  192.168.100.11/24
 <id>: eth1@<peer>: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
 ```
 
-(If `mtu` still shows `9500`, you skipped the `ip link set dev eth1 mtu 1500` line — the AllReduce in Step 6 will hang. If you see a `secondary` IP line, `ip addr flush` was skipped; re-flush and re-add.)
+(If `mtu` still shows `9500`, you skipped the `ip link set dev eth1 mtu 1500` line — the AllReduce in Step 7 will hang. If you see a `secondary` IP line, `ip addr flush` was skipped; re-flush and re-add.)
 
 After all eight workers are on the overlay:
 
-<checkpoint name="worker_overlay_ips" label="Workers carry 192.168.100.11..18/24 on eth1" />
+<checkpoint name="worker_overlay_ips" label="Workers carry 192.168.100.11..18/24 on eth1"/>
 
 ---
 
@@ -241,11 +237,73 @@ You can run the full 56-pair mesh as a checkpoint:
 
 ---
 
-## Step 6: First AllReduce — 2-rank, by hand
+## Step 6: Look back at EVPN — the Type-2 routes have arrived
+
+Remember Lab 2? Back then `show bgp l2vpn evpn` on a leaf showed **only Type-3** (inclusive-multicast) routes — one per VTEP — because the segment had no hosts on it, just the leaf SVIs. We promised the **Type-2 (MAC) routes** would show up "once real hosts put MACs on the segment." That just happened: the eight GPU workers are now bridged into VLAN 1000, the mesh ping made every leaf learn every worker's MAC, and EVPN advertised each one fabric-wide.
+
+Open `leaf1`'s console (drop out of any worker shell) and look again:
+
+```sh
+show bgp l2vpn evpn route type macip      # Type-2 (MAC) routes
+show bgp l2vpn evpn route type multicast  # Type-3 (IMET) routes
+```
+
+You now have **both** route types — here's the tally:
+
+| Route type | Count | What each one is |
+|---|---|---|
+| **Type-2 (MAC)** | **8** | one per GPU worker MAC (2 workers per leaf × 4 leaves) |
+| **Type-3 (IMET)** | **4** | one per leaf VTEP — the flood list, unchanged since Lab 2 |
+
+(The MAC values are assigned by containerlab and differ per deployment — `aa:c1:ab:…` here — but you'll always see exactly 8 Type-2 routes once all workers are up and have been pinged.)
+
+### Read a Type-2 route
+
+```
+Route Distinguisher: 10.0.1.2:2
+ *>  [2]:[0]:[48]:[aa:c1:ab:54:28:cd]
+                    10.0.10.2(spine1)                 0 65000 65102 i
+ *=  [2]:[0]:[48]:[aa:c1:ab:54:28:cd]
+                    10.0.10.2(spine2)                 0 65000 65102 i
+                    RT:65102:10100 ET:8
+```
+
+- `[2]:[0]:[48]:[aa:c1:ab:54:28:cd]` reads as `<RouteType>:<EthTag>:<MAC-len-bits>:<MAC>` — leaf2 announcing "MAC `aa:c1:ab:54:28:cd` lives behind my VTEP." (`MAClen 48`, and **no trailing IP** — we're not doing ARP suppression here, so it's a pure MAC route, not a MAC+IP one.)
+- **Next-hop `10.0.10.2`** is leaf2's VTEP, *not* the spine's router-id — the same next-hop preservation you relied on in Lab 2, now carrying MACs. And you learn it via **both** spines (`*>` best + `*=` equal) — ECMP.
+- The locally-originated ones (under your own RD `10.0.1.1:2`) show next-hop `10.0.10.1(leaf1)` and weight `32768` — those are leaf1's own two workers' MACs (gpu1, gpu2).
+
+### What changed in the data plane
+
+In Lab 2, with zero MAC routes, every frame BUM-flooded to all VTEPs. Now look at the fdb:
+
+```sh
+bridge fdb show dev vtep-1000
+```
+
+```
+aa:c1:ab:54:28:cd dst 10.0.10.2 self extern_learn    <- unicast: this MAC -> leaf2's VTEP
+aa:c1:ab:87:24:de dst 10.0.10.3 self extern_learn
+ ...
+00:00:00:00:00:00 dst 10.0.10.2 self permanent       <- the old flood entries, still here for true BUM
+```
+
+Each remote worker MAC now has a precise **unicast** `dst <VTEP>` entry, flagged `extern_learn` — installed by the **EVPN Type-2 control plane**, not by data-plane learning (`vtep-1000` is still `nolearning`). So a frame to a known GPU is encap'd straight to the one leaf that owns it; only genuine broadcast/unknown-unicast traffic still rides the `00:00:..` flood list. FRR's matching view:
+
+```sh
+show evpn mac vni 10100
+```
+
+Eight MACs — two `local` (leaf1's own gpu1/gpu2, on `eth3`/`eth4`) and six `remote` (each pointing at another leaf's VTEP).
+
+> 💡 **Why this matters in AI DCs**: Type-2 routes are how an AI fabric scales past flooding. With thousands of GPUs, BUM-flooding every gradient packet to every leaf would melt the fabric. Type-2 gives each leaf an exact MAC→VTEP map, so a NCCL/Gloo flow between two specific GPUs is unicast across exactly one spine→leaf path — the precise, non-wasteful forwarding that collective performance depends on. The Type-3 routes from Lab 2 didn't go away; they're the safety net for the rare genuine broadcast (ARP, rendezvous discovery), while Type-2 now carries the bulk of the east-west traffic. That handoff — flood to learn, then unicast forever after — is the whole point of EVPN.
+
+---
+
+## Step 7: First AllReduce — 2-rank, by hand
 
 You're going to run a real Gloo AllReduce between **gpu1 (rank 0)** and **gpu3 (rank 1)**. They're on different leaves — leaf1 and leaf2 — so every byte of the collective rides a VXLAN tunnel through your underlay.
 
-The orchestrator already delivered `/opt/aidc/allreduce.py` onto every worker when you clicked Start ▶. Look at it on any worker (skim, don't read in detail — the `--help` output tells you everything):
+On GPU1:
 
 ```sh
 python3 /opt/aidc/allreduce.py --help
@@ -274,7 +332,7 @@ Expected output on gpu1 within ~5 seconds:
 ```
 [rank 0 @ gpu1] init_process_group master=192.168.100.11:29500 ...
 [rank 0 @ gpu1] joined world of 2
-[rank 0 @ gpu1] OK avg=12.3ms min=10.1ms max=15.4ms elements=50000 world=2 effective_bw=130Mbps
+[rank 0 @ gpu1] OK avg=39.1ms min=31.2ms max=44.0ms elements=50000 world=2 effective_bw=41Mbps
 ```
 
 Switch back to gpu3's console — you should see rank 1's `OK` line too.
@@ -283,11 +341,11 @@ Switch back to gpu3's console — you should see rank 1's `OK` line too.
 
 > 💡 **What's happening underneath**: Gloo's CPU AllReduce uses a ring algorithm. With 2 ranks the "ring" is trivial — they swap halves, sum, swap back. Each swap is a TCP send/recv. Both TCP flows ride VXLAN tunnels through your underlay (gpu1 → vtep-1000 on leaf1 → underlay → vtep-1000 on leaf2 → gpu3, and the reverse). The Gloo rendezvous itself — discovering each rank's address — runs over the same overlay path; the `MASTER_ADDR` we passed is `192.168.100.11`, an overlay IP.
 
-> 💡 **About the bandwidth number**: ~100-300 Mbps is normal for CPU Gloo + software VXLAN. The point isn't the absolute throughput — it's that the collective completes, the result is mathematically correct (every rank's sum-tensor matches `sum(0..world-1)`), and you can see effective bandwidth fluctuate with link conditions later. In a real AI fabric this number would be 100-400 Gbps with RDMA + NCCL on real GPUs.
+> 💡 **About the bandwidth number**: a few tens of Mbps is normal for CPU Gloo + software VXLAN (we measured ~40 Mbps on this fabric; expect anywhere from ~10 to ~100 Mbps depending on host load and the MTU path). The point isn't the absolute throughput — it's that the collective completes, the result is mathematically correct (every rank's sum-tensor matches `sum(0..world-1)`), and you can see effective bandwidth fluctuate with link conditions later. In a real AI fabric this number would be 100-400 Gbps with RDMA + NCCL on real GPUs.
 
 ---
 
-## Step 7: 8-rank AllReduce — the lab's finale
+## Step 8: 8-rank AllReduce — the lab's finale
 
 The 2-rank case is interesting; the 8-rank case is what real training jobs do. Eight ranks means the ring algorithm has 14 steps (2×(n-1)), every step touches every rank, and the rendezvous handshake is more complex.
 
@@ -302,7 +360,7 @@ Click **Submit ✓** in the top bar. The orchestrator will:
 
 Expected: all 6 checkpoints pass within ~30-60 seconds, the lab stamps as **Passed**, and the completion screen appears.
 
-If something fails, look at the most-likely-cause table in [`lab3-solution.md`](lab3-solution.md). The four most common gotchas, in priority order:
+If something fails, here are the four most common gotchas, in priority order:
 
 1. Forgot to flush eth1 / eth3 / eth4 IPs before re-IPing — old IPs persist and create a second secondary that confuses traffic.
 2. `bridge vlan add` without `pvid untagged` — frames egress tagged, the other end drops them.
@@ -315,18 +373,8 @@ If something fails, look at the most-likely-cause table in [`lab3-solution.md`](
 
 | You want to… | Click |
 |---|---|
-| See the canonical answer for any step | **Reveal solution** in the top bar |
-| Wire the whole overlay end-to-end without typing | **Solve** in the top bar (your run is flagged "solved") |
-| Wipe current state + restore Lab 2 baseline | **Reset** in the top bar |
-| Run all checks now | **Submit ✓** in the top bar |
+| See the canonical answer for any step |
+| Wire the whole overlay end-to-end without typing |
+| **Reset** in the top bar |
+|**Submit ✓** in the top bar |
 
-> Your kernel-level `ip` / `bridge` edits live in the running interface state. They don't survive a switch or worker container restart — but the orchestrator never restarts those containers, so you can safely walk away. Close the browser; come back tomorrow; session state, attempts, and last submit result all persist.
-
----
-
-## Where to go next
-
-- [`lab3-solution.md`](lab3-solution.md) — copy-pasteable answer key + common-mistakes troubleshooter
-- [`../topology.md`](../topology.md) — full IP / link reference
-- [`../switch-cli-reference.md`](../switch-cli-reference.md) — SONiC + Linux bridge cheat sheet
-- [`../../notes/decisions.md`](../../notes/decisions.md) — ADR-004 (Gloo on CPU), ADR-005 (one stretched L2 for all GPUs), ADR-008 (why eth3/eth4 are veths and not SONiC ports)

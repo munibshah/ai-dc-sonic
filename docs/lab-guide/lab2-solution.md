@@ -142,10 +142,10 @@ On `leaf1`:
 
 ```sh
 vtysh -c "show bgp l2vpn evpn summary"      # 2 spines Established, int PfxRcd
-vtysh -c "show bgp l2vpn evpn"               # Type-2 + Type-3 routes from 3 remote VTEPs
-vtysh -c "show evpn vni 10100"               # FRR sees vtep-1000, local VTEP 10.0.10.1
-vtysh -c "show evpn vni 10100"                # 3 remote VTEPs (flood: HER) — FRR view
-show vxlan remotevtep                         # 3 remote VTEPs (Creation Source: EVPN) — SONiC view
+vtysh -c "show bgp l2vpn evpn"               # Type-3 IMET routes from 3 remote VTEPs (NO Type-2 — no host MACs until Lab 3)
+vtysh -c "show evpn vni 10100"               # FRR sees vtep-1000, local VTEP 10.0.10.1, # MACs 0
+vtysh -c "show evpn vni 10100"                # 3 remote VTEPs (flood: HER) — FRR view (the one to trust)
+show vxlan remotevtep                         # 3 remote VTEPs (Creation Source: EVPN); OperStatus oper_down is COSMETIC on sonic-vs
 ping -c 2 -W 2 -I Vlan1000 192.168.100.3     # first overlay packet
 ```
 
@@ -163,7 +163,9 @@ The most likely things to go wrong with this lab, in priority order (start at th
 | `show vxlan remotevtep` returns "Total count : 0" even when the overlay clearly works | You're on the **legacy `netreplica/docker-sonic-vs:latest` (2022)** image, which has a swssconfig back-sync gap — FRR learns the remote VTEPs but they don't appear in APP_DB. | Upgrade to `aidc/sonic-vs:202511` (see ADR-011) where this is fixed and the SONiC view works. As a workaround on the legacy image, use `vtysh -c "show evpn vni 10100"` (which always works). |
 | `show bgp l2vpn evpn summary` on leaf1 shows Established, but `show bgp l2vpn evpn` is empty for one specific leaf's prefixes | That leaf forgot `advertise-all-vni`. It established the session but originates no routes for its VNIs. | On the broken leaf: `configure terminal` → `router bgp <ASN>` → `address-family l2vpn evpn` → `advertise-all-vni` → `end` |
 | `show vxlan tunnel` on leaf2 shows the tunnel, but `show evpn vni 10100` in vtysh on leaf2 is empty | Forgot `config vxlan evpn_nvo add nvo1 vtep` on leaf2. The tunnel exists at the data plane, but EVPN signaling wasn't bound to it. | `config vxlan evpn_nvo add nvo1 vtep` on the broken leaf; `show evpn vni` should populate within ~5s |
-| Initial ping works, but subsequent pings fail intermittently | Likely a MAC learning race between Type-2 routes and local bridge learning. Usually resolves itself within a few seconds. If persistent, check that the same VLAN (1000) and VNI (10100) are configured on every leaf — a mismatch causes silent black-holing. | `show vxlan vlanvnimap` on every leaf; confirm same VLAN↔VNI |
+| `show vxlan remotevtep` lists all 3 remote VTEPs but every row says `OperStatus: oper_down` | **Not a bug — cosmetic on `sonic-vs`.** `OperStatus` tracks the *simulated ASIC* tunnel, which never reports up on the emulator; forwarding is done by the Linux-kernel VXLAN device, which is fine. | Ignore the column. Trust `show evpn vni 10100` (FRR), `bridge fdb show dev vtep-1000` (flood list present), and the ping. On real hardware it reads `oper_up`. |
+| Ping works but you expected to see Type-2 MAC routes and there are none | **Expected** — Lab 2 has no host MACs on the segment (just SVIs, and `Advertise-svi-macip: No`), so FRR originates only Type-3. Traffic flows by BUM flooding over the Type-3 flood list. | Nothing to fix. Type-2 routes appear in Lab 3 when the GPU workers attach real NICs. |
+| Ping fails on some leaf pairs but not others | Check the same VLAN (1000) and VNI (10100) are configured on every leaf — a mismatch causes silent black-holing. | `show vxlan vlanvnimap` on every leaf; confirm same VLAN↔VNI |
 | `show bgp l2vpn evpn summary` shows session Established but PfxRcd = 0 on every neighbor | Forgot `neighbor SPINES activate` (on a leaf) or `neighbor LEAVES activate` (on a spine) inside `address-family l2vpn evpn`. The session came up but no AF is active on it — same gotcha as Lab 1's `neighbor X activate` requirement, applied to a different AF | Re-enter `router bgp <ASN>` → `address-family l2vpn evpn` → `neighbor SPINES activate` (or `LEAVES activate` on a spine) |
 | `config vlan add 1000` returns "Vlan with vlan id 1000 already exists" | A previous Solve / overlay run is still present. Either run the teardown sequence (Appendix C) or click **Reset** to wipe back to underlay-only, then try again. | See Appendix C |
 | `config vxlan add vtep 10.0.10.1` returns "Vxlan vtep already exists" | Same — leftover state from a prior run | Run the teardown sequence first; or click Reset |
