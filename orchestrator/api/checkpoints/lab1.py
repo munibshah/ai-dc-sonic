@@ -107,13 +107,21 @@ def _check_spine2_ecmp():
     out = vtysh("leaf1", "show ip route 10.0.1.2")
     if not out:
         return False, "leaf1: route lookup returned nothing", None
-    # Count next-hop lines marked with '*' (active). They look like:
-    #   * 10.1.1.0, via eth1, weight 1
-    star_lines = [ln for ln in out.splitlines() if ln.strip().startswith("*")]
-    if len(star_lines) >= 2:
-        return True, f"leaf1 has {len(star_lines)} ECMP paths to leaf2 loopback", "\n".join(star_lines)
-    if len(star_lines) == 1:
-        return False, "only 1 path to leaf2 (no ECMP yet — spine2 down?)", "\n".join(star_lines) or out[:400]
+    # Count installed/selected next-hop lines. They look like:
+    #   * 10.1.1.0, via eth1, weight 1   <- '*' = FIB, offload-confirmed
+    #   q 10.1.1.0, via eth1, weight 1   <- 'q' = queued for ASIC-offload ack
+    # On aidc/sonic-vs:202511, zebra runs --asic-offload=notify_on_offload, but
+    # the virtual ASIC (libsaivs) never returns the offload notification, so
+    # dataplane-installed BGP routes sit at 'q' permanently — even though the
+    # route IS in the kernel FIB and forwards. Accept both flags: the check's
+    # intent is "2 ECMP paths installed", which 'q' satisfies. (Same class of
+    # FRR-output accommodation as pitfall #13.)
+    nh_lines = [ln for ln in out.splitlines()
+                if ln.strip().startswith(("*", "q")) and "via" in ln]
+    if len(nh_lines) >= 2:
+        return True, f"leaf1 has {len(nh_lines)} ECMP paths to leaf2 loopback", "\n".join(nh_lines)
+    if len(nh_lines) == 1:
+        return False, "only 1 path to leaf2 (no ECMP yet — spine2 down?)", "\n".join(nh_lines) or out[:400]
     return False, "no route to 10.0.1.2 on leaf1", out[:400]
 
 

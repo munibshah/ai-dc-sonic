@@ -27,7 +27,7 @@ The labs form a deliberate sequence — each one builds on the previous lab's en
 
 | # | Title | Starting state | Ending state | Status |
 |---|---|---|---|---|
-| 1 | Build the BGP Underlay | Bare fabric (`_skeleton`) | Working CLOS underlay (`_canonical`) | shipped |
+| 1 | Build the BGP Underlay | Interfaces pre-provisioned, no BGP (`_skeleton`) | Working CLOS underlay (`_canonical`) | shipped |
 | 2 | Build the EVPN-VXLAN Overlay | Working underlay (`_canonical`) | Underlay + EVPN L2 segment leaf-to-leaf (`_overlay`) | shipped |
 | 3 | GPUs on the Overlay + first AllReduce | `_overlay` | Workers on 192.168.100.0/24, real Gloo collective runs (`_overlay_workers`) | shipped |
 | 4 | Telemetry & Visualization with gNMI + Grafana | `_overlay_workers` | Same fabric state — gnmic/Prom/Grafana stack live, dashboards fill during AllReduces. Procedural lab (no FRR config change) | shipped |
@@ -45,7 +45,7 @@ The orchestrator and UI are **fully lab-id polymorphic** — every HTTP route an
   - `BOOTSTRAP_STATE` — name of the `configs/frr/<state>/` dir applied on Start/Reset (e.g. `"_skeleton"` for Lab 1, `"_canonical"` for Lab 2).
   - `SOLVE_STATE` — name of the dir applied on Solve (e.g. `"_canonical"` for Lab 1, `"_overlay"` for Lab 2).
 - **`orchestrator/api/checkpoints/lab<N>.py`** — list-of-tuples registry `CHECKPOINTS: [(name, label, runner)]`. Each runner is a zero-arg callable returning `(passed: bool, summary: str, detail: str | None)`. Helpers come from `dockerlib.py` (`docker_exec`, `vtysh`).
-- **`configs/frr/<state_name>/<sw>/frr.conf`** — the FRR config applied for that state. Existing states: `_skeleton` (blank), `_canonical` (working underlay), `_overlay` (underlay + EVPN-VXLAN), `_overlay_workers` (overlay + worker access ports). Lab 4 (telemetry) reuses `_overlay_workers` for both BOOTSTRAP and SOLVE — it's a procedural lab, no FRR delta.
+- **`configs/frr/<state_name>/<sw>/frr.conf`** — the FRR config applied for that state. Existing states: `_skeleton` (lo + ethN interface IPs pre-provisioned, no BGP — the learner configures only BGP in Lab 1), `_canonical` (working underlay), `_overlay` (underlay + EVPN-VXLAN), `_overlay_workers` (overlay + worker access ports). Lab 4 (telemetry) reuses `_overlay_workers` for both BOOTSTRAP and SOLVE — it's a procedural lab, no FRR delta.
 - **`configs/frr/<state_name>/<sw>/overlay-setup.sh`** *(optional)* — kernel-side `ip link add` for bridges/VXLAN devs. Sourced by `bootstrap-switch.sh` if non-empty; an empty stub triggers teardown of overlay devs.
 - **`configs/frr/<sw>/overlay-setup.sh`** — empty `+x` stub committed per switch as the bind-mount target. The orchestrator's `_apply_configs(state)` truncates and writes content into these.
 - **`configs/frr/bootstrap-switch.sh`** — runs inside each switch container: brings up `eth1..eth4`, sources `overlay-setup.sh` if non-empty (or tears down stale overlay devs), restarts FRR daemons, runs `vtysh -b` to load frr.conf.

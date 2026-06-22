@@ -1,10 +1,8 @@
 # Exercise — Bring the fabric up, one switch at a time
 
-> Read [`00-overview.md`](00-overview.md) first if you haven't.
-
 ## Scenario
 
-You're the network engineer. Six switches were just racked into the lab — `spine1`, `spine2`, `leaf1`, `leaf2`, `leaf3`, `leaf4`. Eight GPU workers (`gpu1`..`gpu8`) are wired in but waiting on the fabric. The switches have no L3 config and no BGP. Your job: bring the fabric up through the in-UI consoles, watch BGP sessions establish in real time, and end with `gpu1` able to ping `gpu7` over **two parallel paths** (one via spine1, one via spine2).
+You're the network engineer. Six switches were just racked into the lab — `spine1`, `spine2`, `leaf1`, `leaf2`, `leaf3`, `leaf4`. Eight GPU workers (`gpu1`..`gpu8`) are wired in but waiting on the fabric. The switches come with their fabric interfaces wired and addressed (lo + ethN /31s), but no BGP. Your job: bring the fabric up through the in-UI consoles, watch BGP sessions establish in real time, and end with `gpu1` able to ping `gpu7` over **two parallel paths** (one via spine1, one via spine2).
 
 You'll build in **end-to-end-first order**: spine1 → leaf1 (the first BGP session comes up!) → leaf2 → spine2 (now ECMP appears) → leaf3 → leaf4. Each step gives you something observable, and each step ends with a **Check** button so you get instant feedback before moving on.
 
@@ -18,9 +16,7 @@ That's what you're going to build.
 
 ### Get to the starting line
 
-Click **Start lab ▶** in the top bar. The orchestrator wipes every switch back to a bare-bones FRR config (no interfaces, no BGP) and reloads the daemons. Within ~10 seconds the lab status pill flips to `In progress` and you're ready. Click it again at any time to restart from scratch — your past work is just discarded.
-
-Open the **Topology** button to see the fabric, or click **+** in the terminals pane to open a console for any device. Same six switches, same eight workers — but right now nothing is reachable across leaves.
+Open the **Topology** button to see the fabric, or click **+** in the terminals pane to open a console for any device. 
 
 ---
 
@@ -28,33 +24,7 @@ Open the **Topology** button to see the fabric, or click **+** in the terminals 
 
 Click **Topology** in the top bar, then click `spine1`. A new terminal tab opens — you're now inside a bash shell on the spine1 container.
 
-### Discover what's there
-
-```sh
-hostname
-ip -br link show
-ip -br addr show eth1 eth2 eth3 eth4 lo
-```
-
-Expected:
-
-- `hostname` → `spine1`
-- `ip -br link show` → eth0..eth4 + lo, all `UP`
-- `ip -br addr show` → eth0 has a 172.20.20.11 mgmt IP, but eth1..eth4 are empty, lo only has 127.0.0.1
-
-This is what a freshly-racked spine looks like: physical links up, no L3.
-
-### Look up your IPs
-
-Open [`../topology.md`](../topology.md) §3 in another tab. Find the spine1 factsheet:
-
-- Loopback → `10.0.0.1/32`
-- eth1 (to leaf1) → `10.1.1.0/31`
-- eth2 (to leaf2) → `10.1.1.2/31`
-- eth3 (to leaf3) → `10.1.1.4/31`
-- eth4 (to leaf4) → `10.1.1.6/31`
-
-### Configure the loopback
+### Enter FRR CLI
 
 ```sh
 vtysh
@@ -62,53 +32,44 @@ vtysh
 
 You're in the FRR CLI now. (The prompt may show `will-be-overridden#` — a quirk of the sonic-vs base image where its own hostname line overrides ours. Cosmetic; the FRR daemon's identity is still `spine1`.)
 
-```
-configure terminal
-interface lo
- ip address 10.0.0.1/32
-exit
-```
 
-> 💡 **Why a loopback?** Spine1's BGP router-id and the source of its BGP-advertised routes is `10.0.0.1`. Loopback is the "always up" interface — even if `eth1` flaps, the BGP session sourced from the loopback (over `eth2` or any other path) stays identified by the same router-id. In CLOS, a control plane that flaps with every physical link bounce is unworkable; loopback addressing keeps identity decoupled from any single link.
 
-### Configure the fabric interfaces
+### Discover what's there
 
-```
-interface eth1
- description to_leaf1
- ip address 10.1.1.0/31
-exit
-interface eth2
- description to_leaf2
- ip address 10.1.1.2/31
-exit
-interface eth3
- description to_leaf3
- ip address 10.1.1.4/31
-exit
-interface eth4
- description to_leaf4
- ip address 10.1.1.6/31
-exit
+```sh
+show interface brief 
 ```
 
-> 💡 **Why /31s?** Each fabric link is point-to-point between exactly two devices. A `/30` wastes the network and broadcast addresses (2 of 4 unusable). A `/31` (RFC 3021) uses just 2 addresses, both usable as host. At hyperscale with thousands of fabric links, that's tens of thousands of IPs saved — and it cleanly enforces "only two devices on this segment, no surprises."
+Expected:
 
-### Check your work so far
+- eth0..eth4 + lo, all `UP`
+- eth0 has a 172.20.20.11 mgmt IP
+- eth1..eth4 are configured and can ping leaf1..leaf4
 
+Test this — ping the far end of eth1 (leaf1):
+
+```sh
+ping 10.1.1.1
 ```
-do show interface brief
-```
 
-Expected: a long table — `Bridge`, `Ethernet0..Ethernet124`, `dummy`, `eth0..eth4`, `lo`. The SONiC `EthernetN` rows are all `down` (they're physical port names the lab doesn't use — ignore them). The interesting rows are at the bottom: `eth1..eth4` all `up` with the IPs you just configured, `lo up 10.0.0.1/32`, `eth0` `up` with the mgmt IP.
+Expected: a long table — `Bridge`, `Ethernet0..Ethernet124`, `dummy`, `eth0..eth4`, `lo`. The SONiC `EthernetN` rows are all `down` (they're physical port names the lab doesn't use — ignore them). The interesting rows are at the bottom: `eth1..eth4` all `up` with the IPs mentioned above, `lo up 10.0.0.1/32`, `eth0` `up` with the mgmt IP.
 
 Run the checkpoint:
 
 <checkpoint name="spine1_underlay" label="Spine 1 underlay (lo + ethN IPs)" />
 
+
+> 💡 **Why a loopback?** Spine1's BGP router-id and the source of its BGP-advertised routes is `10.0.0.1`. Loopback is the "always up" interface — even if `eth1` flaps, the BGP session sourced from the loopback (over `eth2` or any other path) stays identified by the same router-id. In CLOS, a control plane that flaps with every physical link bounce is unworkable; loopback addressing keeps identity decoupled from any single link.
+
+> 💡 **Why /31s?** Each fabric link is point-to-point between exactly two devices. A `/30` wastes the network and broadcast addresses (2 of 4 unusable). A `/31` (RFC 3021) uses just 2 addresses, both usable as host. At hyperscale with thousands of fabric links, that's tens of thousands of IPs saved — and it cleanly enforces "only two devices on this segment, no surprises."
+
+
 ### Configure BGP
 
+Enter configuration mode, then start the BGP process:
+
 ```
+configure terminal
 router bgp 65000
  bgp router-id 10.0.0.1
  bgp bestpath as-path multipath-relax
@@ -130,15 +91,15 @@ router bgp 65000
 >
 > All of these are in the **private AS range** (RFC 6996: 64512–65534). Like RFC 1918 for IPs, private ASNs are reserved for internal use — they never appear in the public BGP table.
 >
-> **Why eBGP-everywhere, not iBGP + an IGP?** Traditional enterprise designs run an IGP (OSPF / IS-IS) for underlay reachability and iBGP on top for service routes. AI/hyperscale CLOS flips this: every adjacent pair speaks **eBGP**, end of story. Three benefits:
+> **Why eBGP-everywhere, not iBGP + an IGP?** Traditional enterprise designs run an IGP (OSPF / IS-IS) for underlay reachability and iBGP on top for service routes. AI/hyperscale CLOS flips this: every adjacent pair speaks **eBGP**. Three benefits:
 >
-> 1. **Loop prevention is free** — eBGP rejects any route whose AS_PATH already contains the receiver's own AS. In a CLOS where every leaf has a unique AS, loops are mathematically impossible without writing a single line of filtering. No IGP split-horizon, no TTL hacks.
-> 2. **No full mesh, no route reflectors** — iBGP requires either a full mesh of sessions OR route-reflector hierarchies to propagate external routes. eBGP-only sidesteps both. At 1000+ switches, RR scaling becomes its own engineering problem.
-> 3. **One control plane to debug** — when something is broken, it's broken in BGP. There's no IGP that might also be wrong, no redistribution boundary to chase.
->
-> **Why both spines share AS 65000?** In a 2-spine CLOS, both spines must be path-equivalent from a leaf's perspective. If spine1=65001 and spine2=65002, every cross-leaf path would have to traverse the inter-spine link (longer AS_PATH = less preferred), and we'd need spine-to-spine peering to glue it together. With a shared spine ASN, every leaf sees both spines as exactly equal-cost, and the spines never have to talk to each other. This is the "shared spine AS" pattern documented across every hyperscale fabric design.
+> 1. **Loop prevention is free** — eBGP rejects any route whose AS_PATH already contains the receiver's own AS. In a CLOS topology where every leaf has a unique AS, loops are mathematically impossible without writing a single line of filtering. No IGP split-horizon, no TTL hacks required. 
+> 2. **No full mesh, no route reflectors** — iBGP requires either a full mesh of sessions OR route-reflector hierarchies to propagate external routes. eBGP-only sidesteps both. At 1000+ switches, RR scaling becomes an engineering problem that we avoid with eBGP.
+> 3. **One control plane to debug** — when something is broken, it's broken in BGP. There's no IGP that might also be wrong and no redistribution boundary to troubleshoot.
 
-> 💡 **What's `multipath-relax`?** Default BGP requires the AS_PATH to be **identical** (byte-for-byte) across paths to call them equal-cost. In our CLOS, leaf1 sees leaf3's loopback via two paths: `[65000 65103]` via spine1 and `[65000 65103]` via spine2 — same content, but a strict implementation can still treat them as distinct. `multipath-relax` loosens the rule to "same length, same neighbor AS." This is *the* knob that makes ECMP work in CLOS with shared spine ASNs. Without it, ECMP silently collapses to a single next-hop and you'd never know until your training run was 2× slower than expected.
+> **Why both spines share AS 65000?** In a 2-spine CLOS, both spines must be path-equivalent from a leaf's perspective. If spine1=65001 and spine2=65002, every cross-leaf path would have to traverse the inter-spine link (longer AS_PATH = less preferred), and we'd need spine-to-spine peering to glue it together. With a shared spine ASN, every leaf sees both spines as exactly equal-cost, and the spines never have to talk to each other. 
+
+> 💡 **What's `multipath-relax`?** Default BGP requires the AS_PATH to be **identical** (byte-for-byte) across paths to call them equal-cost. In our CLOS, leaf1 sees leaf3's loopback via two paths: `[65000 65103]` via spine1 and `[65000 65103]` via spine2 — same content, but a strict implementation can still treat them as distinct. `multipath-relax` loosens the rule to "same length, same neighbor AS." This is *the* knob that makes ECMP work in CLOS with shared spine ASNs. Without it, ECMP collapses to a single next-hop and your training run will be 2× slower than expected.
 
 > 💡 **Why `no bgp default ipv4-unicast`?** By default, FRR auto-activates the IPv4-unicast address family for every new neighbor. Best practice (and standard in hyperscale templates) is to disable that and explicitly activate per address-family inside the AF block. It makes intent unambiguous — especially important once you have IPv6 + L2VPN-EVPN + VPNv4 ASes layered on the same neighbors.
 
@@ -195,7 +156,6 @@ You're back at the top-level FRR prompt (not in any config block).
 ### Verify what you just built
 
 ```
-show interface brief
 show bgp summary
 ```
 
@@ -211,7 +171,7 @@ Neighbor        V         AS    MsgRcvd    MsgSent   ...  State/PfxRcd
 
 All four leaves show `Active` (or `Connect`). That's correct — the leaves haven't been configured yet, so the TCP connection can't establish.
 
-> 💡 **What you've built**: Spine1 has L3 ports, BGP configured with four leaf-peer slots, and is waiting. Zero peers up = zero routes flowing. This is exactly what a freshly-configured spine looks like the moment it's wired in: it knows what it *should* peer with, it's listening, nothing is responding. Time to bring up a leaf.
+> 💡 **What you've built**: Spine1 has L3 ports, BGP configured with four leaf-peer slots, and is waiting. Zero peers up = zero routes flowing. This is how a freshly-configured spine looks like the moment it's wired in: it knows what it *should* peer with, it's listening, nothing is responding. Time to bring up a leaf.
 
 ---
 
@@ -219,14 +179,17 @@ All four leaves show `Active` (or `Connect`). That's correct — the leaves have
 
 Back in **Topology**, click `leaf1`. New terminal tab opens.
 
-### Discover
+### Configure
 
 ```sh
-hostname              # leaf1
-ip -br addr show      # eth1..eth4 empty, lo only 127/8
+vtysh
 ```
 
-### Look up your IPs ([`../topology.md`](../topology.md) §3, leaf1 factsheet)
+### Look up your IPs
+
+```
+show interface brief
+```
 
 - Loopback router-id → `10.0.1.1/32`
 - Loopback VTEP (reserved for EVPN-VXLAN later) → `10.0.10.1/32`
@@ -236,41 +199,12 @@ ip -br addr show      # eth1..eth4 empty, lo only 127/8
 - eth4 (to gpu2) → `10.2.1.2/31`
 - ASN → **65101**
 
-### Configure
+> 💡 **Why two loopbacks?** `10.0.1.1` is the BGP router-id. `10.0.10.1` is pre-allocated as the **VTEP** address for the EVPN-VXLAN overlay we'll add in a later phase. Why allocate it now? Renumbering loopbacks across a live fabric is painful (peerings change, route-maps need updating). Pre-allocating the VTEP block when you design the fabric means later expansion is a no-op on the underlay.
 
-```sh
-vtysh
-```
+Now BGP — enter configuration mode and start the BGP process:
 
 ```
 configure terminal
-interface lo
- ip address 10.0.1.1/32
- ip address 10.0.10.1/32
-exit
-interface eth1
- description to_spine1
- ip address 10.1.1.1/31
-exit
-interface eth2
- description to_spine2
- ip address 10.1.2.1/31
-exit
-interface eth3
- description to_gpu1
- ip address 10.2.1.0/31
-exit
-interface eth4
- description to_gpu2
- ip address 10.2.1.2/31
-exit
-```
-
-> 💡 **Why two loopbacks?** `10.0.1.1` is the BGP router-id. `10.0.10.1` is pre-allocated as the **VTEP** address for the EVPN-VXLAN overlay we'll add in a later phase. Why allocate it now? Renumbering loopbacks across a live fabric is painful (peerings change, route-maps need updating). Pre-allocating the VTEP block when you design the fabric means later expansion is a no-op on the underlay.
-
-Now BGP:
-
-```
 router bgp 65101
  bgp router-id 10.0.1.1
  bgp bestpath as-path multipath-relax
@@ -289,10 +223,10 @@ router bgp 65101
 > 💡 **Why a unique ASN per leaf?** Three reasons, each one paying for itself many times over at scale:
 >
 > 1. **Failure isolation and attribution** — if leaf2 misconfigures and starts advertising garbage prefixes, every other device in the fabric sees them as "originated by AS 65102." Trivial to trace, trivial to filter at a spine with `route-map deny match as-path`. With every leaf sharing one AS, you'd disambiguate by router-id or BGP community — much more friction in incident response.
-> 2. **Loop prevention only works because of this** — recall eBGP's own-AS rejection rule (covered in the spine1 callout). That rule only buys you anything if every leaf actually has a *unique* AS. With same-AS leaves, the natural loop prevention disappears and you'd need additional config (community-based filters, allowas-in tweaks) just to keep the topology safe. The unique-per-leaf scheme is what makes eBGP-everywhere viable in the first place.
+> 2. **Loop prevention only works because of this** — recall eBGP's own-AS rejection rule (covered in the spine1 callout). That rule works if every leaf actually has a *unique* AS. With same-AS leaves, you'd need additional config (community-based filters, allowas-in tweaks) just to keep the topology safe. 
 > 3. **Per-leaf policy becomes a one-liner** — want to drain leaf3 for maintenance? `route-map drain deny match as-path 65103` on both spines, traffic shifts to the others automatically. Want to redirect leaf2 to a specific upstream during an upgrade? Match its AS, set local-pref. With shared leaf ASNs, every per-leaf policy needs additional tagging or router-id matching.
 >
-> At hyperscale operability, this kind of attribution capability pays off in 3am pages.
+> At hyperscale operability, this kind of attribution capability pays off.
 
 ### Activate and advertise
 
@@ -338,10 +272,12 @@ show ip route bgp
 Expected (one BGP-learned route):
 
 ```
-B>* 10.0.0.1/32 [20/0] via 10.1.1.0, eth1, weight 1, ...
+B>q 10.0.0.1/32 [20/0] via 10.1.1.0, eth1, weight 1, ...
 ```
 
 That's spine1's loopback, learned via BGP from spine1, reachable via eth1.
+
+> 💡 **What's the `q` flag?** You may expect `B>*` (the classic "selected + FIB" markers) but see `B>q` instead. `>` still means *selected (best)*; `q` means *queued for ASIC-offload confirmation*. On this virtual SONiC image, zebra runs in `asic-offload=notify_on_offload` mode — it stamps a route `*` only after the (simulated) ASIC reports "offloaded," and the virtual ASIC never sends that notification. **The route is fully installed in the kernel and forwards normally** — `q` here is cosmetic, not an error. On real SONiC hardware these flip to `*` once the ASIC confirms offload. Throughout this lab, read `q` as "installed and forwarding."
 
 ### Ping spine1 from leaf1
 
@@ -371,7 +307,7 @@ Expected: success. gpu1's default route is `10.2.1.0` (leaf1's eth3). Leaf1 has 
 
 ## Step 3: Bring up `leaf2`
 
-Open the `leaf2` console. Same pattern as leaf1, with leaf2's numbers from [`../topology.md`](../topology.md) §3.
+Open the `leaf2` console. Same pattern as leaf1 — interfaces are pre-provisioned, so you only configure BGP.
 
 ```sh
 vtysh
@@ -379,26 +315,6 @@ vtysh
 
 ```
 configure terminal
-interface lo
- ip address 10.0.1.2/32
- ip address 10.0.10.2/32
-exit
-interface eth1
- description to_spine1
- ip address 10.1.1.3/31
-exit
-interface eth2
- description to_spine2
- ip address 10.1.2.3/31
-exit
-interface eth3
- description to_gpu3
- ip address 10.2.2.0/31
-exit
-interface eth4
- description to_gpu4
- ip address 10.2.2.2/31
-exit
 router bgp 65102
  bgp router-id 10.0.1.2
  bgp bestpath as-path multipath-relax
@@ -460,7 +376,7 @@ Expected: success. The traffic goes `gpu1 → leaf1 → spine1 → leaf2 → gpu
 
 ## Step 4: Bring up `spine2` — and watch ECMP arrive
 
-Open the `spine2` console. Same pattern as spine1, but with the `10.1.2.*` block and router-id `10.0.0.2`.
+Open the `spine2` console. Same pattern as spine1 — interfaces are pre-provisioned, so you only configure BGP (router-id `10.0.0.2`, neighbors on the `10.1.2.*` block).
 
 ```sh
 vtysh
@@ -468,25 +384,6 @@ vtysh
 
 ```
 configure terminal
-interface lo
- ip address 10.0.0.2/32
-exit
-interface eth1
- description to_leaf1
- ip address 10.1.2.0/31
-exit
-interface eth2
- description to_leaf2
- ip address 10.1.2.2/31
-exit
-interface eth3
- description to_leaf3
- ip address 10.1.2.4/31
-exit
-interface eth4
- description to_leaf4
- ip address 10.1.2.6/31
-exit
 router bgp 65000
  bgp router-id 10.0.0.2
  bgp bestpath as-path multipath-relax
@@ -529,11 +426,11 @@ Expected: **two next-hops** (FRR's single-prefix view uses a detailed format).
 Routing entry for 10.0.1.2/32
   Known via "bgp", distance 20, metric 0, best
   Last update 00:00:08 ago
-  * 10.1.1.0, via eth1, weight 1
-  * 10.1.2.0, via eth2, weight 1
+  q 10.1.1.0, via eth1, weight 1
+  q 10.1.2.0, via eth2, weight 1
 ```
 
-That's ECMP. Two parallel paths to leaf2's loopback — one via spine1, one via spine2. (If you'd rather see the compact form, `show ip route bgp` gives the familiar `B>* 10.0.1.2/32 [20/0] via 10.1.1.0, eth1 / via 10.1.2.0, eth2` format.)
+That's ECMP. Two parallel paths to leaf2's loopback — one via spine1, one via spine2. (Both lines show the `q` flag — queued for ASIC-offload confirmation, installed and forwarding; see the callout in Step 2. If you'd rather see the compact form, `show ip route bgp` gives `B>q 10.0.1.2/32 [20/0] via 10.1.1.0, eth1 / via 10.1.2.0, eth2`.)
 
 <checkpoint name="spine2_ecmp" label="ECMP — Leaf 1 has 2 paths to Leaf 2" />
 
@@ -545,7 +442,7 @@ Try the cross-leaf ping again from gpu1 — still works, and now it's redundant.
 
 ## Step 5: Bring up `leaf3`
 
-Same pattern. Numbers from [`../topology.md`](../topology.md) §3, leaf3 row:
+Same pattern. Leaf3 configuration:
 
 - ASN: **65103**
 - Loopbacks: `10.0.1.3/32`, `10.0.10.3/32`
@@ -555,7 +452,6 @@ Same pattern. Numbers from [`../topology.md`](../topology.md) §3, leaf3 row:
 - eth4 (to gpu6): `10.2.3.2/31`
 - network statements: 4 lines (loopback + VTEP + 2 worker /31s)
 
-Full vtysh sequence in [`02-solution.md`](02-solution.md) §5 (or click **Reveal solution** in the top bar).
 
 ---
 
@@ -567,8 +463,6 @@ Full vtysh sequence in [`02-solution.md`](02-solution.md) §5 (or click **Reveal
 - eth2: `10.1.2.7/31` → neighbor `10.1.2.6`
 - eth3 (to gpu7): `10.2.4.0/31`
 - eth4 (to gpu8): `10.2.4.2/31`
-
-Full vtysh sequence in [`02-solution.md`](02-solution.md) §6.
 
 Once both leaves are up:
 
@@ -650,17 +544,6 @@ Within seconds, BGP re-establishes on leaf3 and ECMP returns.
 | You want to… | Click |
 |---|---|
 | See the canonical answer for any step | **Reveal solution** in the top bar |
-| Push the canonical config into the live fabric (no need to type vtysh) | **Solve** in the top bar (your run will be flagged "solved") |
-| Wipe everything back to a bare fabric and try again | **Reset** in the top bar (or **Start lab ▶** if you've never started) |
-| Run all checks now | **Submit ✓** in the top bar |
-
-> Your vtysh edits live in the running FRR daemons. They don't persist across a switch container restart — but the orchestrator never restarts switch containers, so you can safely walk away. Just close the browser; when you come back, your session resumes where you left it.
 
 ---
 
-## Where to go next
-
-- [`02-solution.md`](02-solution.md) — full copy-pasteable vtysh sequences for every switch, plus a vtysh ↔ frr.conf mapping table and common-mistakes troubleshooter
-- [`../topology.md`](../topology.md) — full IP / link / BGP reference
-- [`../switch-cli-reference.md`](../switch-cli-reference.md) — vtysh + Linux network CLI cheatsheet
-- [`../00-index.md`](../00-index.md) — the concept blogs for each AI DC topic (AllReduce, GPU-to-GPU comms, east-west dominance, etc.), each paired with a scenario you can run on this fabric
