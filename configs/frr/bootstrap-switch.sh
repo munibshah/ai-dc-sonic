@@ -42,14 +42,14 @@ sysctl -w net.ipv4.fib_multipath_hash_policy=1 >/dev/null 2>&1 || true
 # 2. Overlay teardown (always runs). Removes any prior Lab 2 / Lab 3 SONiC
 #    overlay state so the next step starts from a clean slate. `|| true`
 #    makes each line a no-op when the resource doesn't exist.
-#    Note: `config interface ip remove` is enumerated for all four possible
-#    leaf IPs in Lab 2's 192.168.100.0/24 segment — same script runs on every
-#    switch, only one of those `remove` lines will actually match on any
-#    given leaf. `config vlan del 1000` refuses to delete a VLAN that still
-#    has a VLAN_INTERFACE IP, so the `ip remove` must succeed first.
-#    (Lab 2 uses SONiC CLI for the overlay; the construct names below are
-#    the Lab 2 standard. Future labs that introduce new constructs should
-#    extend this teardown.)
+#    Note: `config interface ip remove Vlan1000 <ip>` is BROKEN in this image
+#    (aidc/sonic-vs:202511) — it runs a BGP-impact check that crashes with
+#    "Unable to get summary from bgp []", so the IP is never removed and
+#    `config vlan del 1000` then refuses ("First remove IP addresses"), leaving
+#    Vlan1000 to leak into the next lab / next learner. We delete the
+#    VLAN_INTERFACE / VLAN_MEMBER rows from CONFIG_DB directly (redis db 4)
+#    instead; intfmgrd/vlanmgrd reconcile the kernel. Future labs that introduce
+#    new SONiC constructs should extend this teardown.
 #
 #    Lab 3 additionally adds eth3/eth4 to the kernel bridge `Bridge` (so
 #    the worker veths become VLAN 1000 access ports). Detach them here
@@ -61,11 +61,21 @@ done
 config vxlan map del vtep 1000 10100 2>/dev/null || true
 config vxlan evpn_nvo del nvo1 2>/dev/null || true
 config vxlan del vtep 2>/dev/null || true
-config interface ip remove Vlan1000 192.168.100.1/24 2>/dev/null || true
-config interface ip remove Vlan1000 192.168.100.2/24 2>/dev/null || true
-config interface ip remove Vlan1000 192.168.100.3/24 2>/dev/null || true
-config interface ip remove Vlan1000 192.168.100.4/24 2>/dev/null || true
+# Drop Vlan1000's members + L3 addresses straight from CONFIG_DB (the SONiC
+# `config interface ip remove` CLI is broken here — see note above), then delete
+# the VLAN. `config vlan del` may print a FileNotFoundError for a cosmetic
+# post-step that execs `docker` (absent in-container) AFTER the VLAN is already
+# removed — harmless. `ip link del` is a final kernel-side backstop.
+for k in $(redis-cli -n 4 keys 'VLAN_MEMBER|Vlan1000|*' 2>/dev/null); do
+  redis-cli -n 4 del "$k" >/dev/null 2>&1 || true
+done
+for k in $(redis-cli -n 4 keys 'VLAN_INTERFACE|Vlan1000|*' 2>/dev/null); do
+  redis-cli -n 4 del "$k" >/dev/null 2>&1 || true
+done
+redis-cli -n 4 del 'VLAN_INTERFACE|Vlan1000' >/dev/null 2>&1 || true
+sleep 1
 config vlan del 1000 2>/dev/null || true
+ip link del Vlan1000 2>/dev/null || true
 
 # 3. Overlay setup (Lab 2+). If /etc/frr/overlay-setup.sh is non-empty, run
 #    it to create the SONiC VLAN + VXLAN + EVPN NVO this switch needs before
