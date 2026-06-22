@@ -445,6 +445,8 @@ If something fails, the four common gotchas, in priority order:
 
 ## Stuck? Want to restart?
 
+| You want to… | Click |
+|---|---|
 | Wipe overlay state + restore healthy underlay | **Reset** in the top bar |
 | Run all checks now | **Submit ✓** in the top bar |
 
