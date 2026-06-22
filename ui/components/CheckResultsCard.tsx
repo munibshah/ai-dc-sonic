@@ -6,14 +6,17 @@ import { Check, X } from "@/components/icons";
 
 interface Props {
   result: SubmitResult;
+  /** Drop the outer margin/border so the card fills a host container (drawer). */
+  embedded?: boolean;
 }
 
-export default function CheckResultsCard({ result }: Props) {
+export default function CheckResultsCard({ result, embedded = false }: Props) {
   const total = result.results.length;
   const completed = result.results.filter((r) => !r._pending).length;
   const pass = result.results.filter((r) => !r._pending && r.passed).length;
   const fail = result.results.filter((r) => !r._pending && !r.passed).length;
-  const running = completed < total;
+  // total === 0 = meta not in yet; treat as running so we never flash "all passed".
+  const running = total === 0 || completed < total;
   const ok = !running && result.passed;
 
   // While the stream is in flight, show progress instead of the final verdict.
@@ -60,7 +63,7 @@ export default function CheckResultsCard({ result }: Props) {
   }
 
   return (
-    <div className="mx-6 my-4 rounded-lg border border-white/10 bg-black/40 overflow-hidden">
+    <div className={`${embedded ? "" : "mx-6 my-4 rounded-lg border border-white/10"} bg-black/40 overflow-hidden`}>
       <div className={`px-4 py-3 flex items-center justify-between gap-3 border-b ${headerClasses}`}>
         <div>{header}</div>
       </div>

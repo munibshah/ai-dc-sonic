@@ -22,7 +22,7 @@ import { useToasts } from "@/components/Toast";
 import GuidePane from "@/components/GuidePane";
 import LabControlBar, { LabAction } from "@/components/LabControlBar";
 import { ArrowRight, Lock } from "@/components/icons";
-import CheckResultsCard from "@/components/CheckResultsCard";
+import SubmitResultsDrawer from "@/components/SubmitResultsDrawer";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import PassedScreen from "@/components/PassedScreen";
 import StatusBanner from "@/components/StatusBanner";
@@ -58,6 +58,9 @@ export default function LabWorkbenchPage() {
   const [confirm, setConfirm] = useState<ConfirmKind>(null);
   const [showPass, setShowPass] = useState(false);
   const [pendingSubmit, setPendingSubmit] = useState<SubmitResult | null>(null);
+  // Floating results drawer: shown for an active/last Submit, dismissible.
+  const [showResults, setShowResults] = useState(false);
+  const [guidePart, setGuidePart] = useState<"exercise" | "solution">("exercise");
   const prevState = useRef<LabRun["state"] | null>(null);
   const terminalsRef = useRef<TabbedTerminalsHandle>(null);
   const streamCloseRef = useRef<(() => void) | null>(null);
@@ -149,6 +152,8 @@ export default function LabWorkbenchPage() {
       (r) => {
         setRun(r);
         setPendingSubmit(null);
+        setShowResults(false);
+        setGuidePart("exercise");
         toasts.push({
           tone: "success",
           title: isFirstLab ? "Lab started" : "Lab ready",
@@ -169,6 +174,8 @@ export default function LabWorkbenchPage() {
       (r) => {
         setRun(r);
         setPendingSubmit(null);
+        setShowResults(false);
+        setGuidePart("exercise");
         toasts.push({
           tone: "success",
           title: "Reset complete",
@@ -187,6 +194,7 @@ export default function LabWorkbenchPage() {
     // the user clicks — the SSE `meta` event also carries them, but the
     // round-trip-zero feel is worth the duplicated render.
     setBusy("submit");
+    setShowResults(true);
     setPendingSubmit({ passed: false, results: [], duration_ms: 0 });
 
     streamCloseRef.current = submitLabStream(labId, {
@@ -236,6 +244,9 @@ export default function LabWorkbenchPage() {
         setRun(d.run);
         setBusy(null);
         streamCloseRef.current = null;
+        // On pass the full-screen PassedScreen celebrates; close the drawer so
+        // the two don't stack. On fail, keep it open with the diagnostics.
+        if (d.passed) setShowResults(false);
         if (!d.passed) {
           const failed = pendingSummary(setPendingSubmit, "fail-count");
           toasts.push({
@@ -328,8 +339,23 @@ export default function LabWorkbenchPage() {
       <div className="flex flex-col lg:flex-row gap-3 flex-1 min-h-0">
         {guideVisible && (
           <section className={`${guideBasis} lg:grow lg:shrink min-h-0 rounded-lg border border-white/10 bg-black/30 overflow-y-auto flex flex-col`}>
-            <GuidePane labId={lab.id} part="exercise" />
-            {lastSummary && <CheckResultsCard result={lastSummary} />}
+            <div className="sticky top-0 z-10 flex gap-1 px-3 py-2 bg-black/70 backdrop-blur border-b border-white/10">
+              {(["exercise", "solution"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setGuidePart(p)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium capitalize ${
+                    guidePart === p
+                      ? "bg-white/15 text-white"
+                      : "text-white/55 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            <GuidePane labId={lab.id} part={guidePart} />
           </section>
         )}
 
@@ -359,6 +385,19 @@ export default function LabWorkbenchPage() {
           devices={devices}
           onPickNode={openNodeTerminal}
           onClose={() => setTopoOpen(false)}
+        />
+      )}
+
+      {showResults && lastSummary && (
+        <SubmitResultsDrawer
+          result={lastSummary}
+          onClose={() => setShowResults(false)}
+          onRerun={onSubmit}
+          onRevealSolution={() => {
+            setGuidePart("solution");
+            setFocusTerminal(false);
+            setFocusTelemetry(false);
+          }}
         />
       )}
 
