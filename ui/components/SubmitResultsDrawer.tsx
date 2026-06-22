@@ -8,7 +8,6 @@ interface Props {
   result: SubmitResult;
   onClose: () => void;
   onRerun: () => void;
-  onRevealSolution: () => void;
 }
 
 /**
@@ -20,11 +19,10 @@ interface Props {
  * verdict with per-check reasons and recovery actions on failure. Success is
  * handled by the full-screen PassedScreen, so the parent dismisses this on pass.
  */
-export default function SubmitResultsDrawer({ result, onClose, onRerun, onRevealSolution }: Props) {
+export default function SubmitResultsDrawer({ result, onClose, onRerun }: Props) {
   const total = result.results.length;
   const completed = result.results.filter((r) => !r._pending).length;
   const running = total === 0 || completed < total;
-  const failed = !running && !result.passed;
 
   return (
     <div
@@ -54,15 +52,6 @@ export default function SubmitResultsDrawer({ result, onClose, onRerun, onReveal
           >
             Re-run checks
           </button>
-          {failed && (
-            <button
-              type="button"
-              onClick={onRevealSolution}
-              className="px-3 py-1.5 rounded-md text-sm font-medium text-white/70 hover:text-white hover:bg-white/10 border border-white/10"
-            >
-              Reveal solution
-            </button>
-          )}
           <button
             type="button"
             onClick={onClose}

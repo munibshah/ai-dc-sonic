@@ -30,7 +30,7 @@ import FabricHoldBanner from "@/components/FabricHoldBanner";
 import FabricExpiryWatcher from "@/components/FabricExpiryWatcher";
 import TabbedTerminals, { TabbedTerminalsHandle } from "@/components/TabbedTerminals";
 import TelemetryPane from "@/components/TelemetryPane";
-import TopologyOverlay from "@/components/TopologyOverlay";
+import TopologyDiagram from "@/components/TopologyDiagram";
 
 type ConfirmKind = "reset" | null;
 
@@ -51,7 +51,6 @@ export default function LabWorkbenchPage() {
   const [unlocked, setUnlocked] = useState<boolean | null>(null); // null until known
   const [prevLabId, setPrevLabId] = useState<string | null>(null);
   const [devices, setDevices] = useState<Device[] | null>(null);
-  const [topoOpen, setTopoOpen] = useState(false);
   const [focusTerminal, setFocusTerminal] = useState(false);
   const [focusTelemetry, setFocusTelemetry] = useState(false);
   const [busy, setBusy] = useState<LabAction | null>(null);
@@ -60,7 +59,7 @@ export default function LabWorkbenchPage() {
   const [pendingSubmit, setPendingSubmit] = useState<SubmitResult | null>(null);
   // Floating results drawer: shown for an active/last Submit, dismissible.
   const [showResults, setShowResults] = useState(false);
-  const [guidePart, setGuidePart] = useState<"exercise" | "solution">("exercise");
+  const [guidePart, setGuidePart] = useState<"exercise" | "topology">("exercise");
   const prevState = useRef<LabRun["state"] | null>(null);
   const terminalsRef = useRef<TabbedTerminalsHandle>(null);
   const streamCloseRef = useRef<(() => void) | null>(null);
@@ -123,6 +122,14 @@ export default function LabWorkbenchPage() {
 
   function openNodeTerminal(name: string) {
     terminalsRef.current?.openTerminal(name);
+  }
+
+  // Topology now lives in the guide-pane tab strip (no modal overlay). Switching
+  // to it also pops out of any focus mode so the guide pane is actually visible.
+  function openTopologyTab() {
+    setGuidePart("topology");
+    setFocusTerminal(false);
+    setFocusTelemetry(false);
   }
 
   // ---- actions ---------------------------------------------------------------
@@ -315,7 +322,7 @@ export default function LabWorkbenchPage() {
         onStart={onStart}
         onReset={() => setConfirm("reset")}
         onSubmit={onSubmit}
-        onOpenTopology={() => setTopoOpen(true)}
+        onOpenTopology={openTopologyTab}
         onToggleFocus={() => {
           setFocusTerminal((f) => !f);
           setFocusTelemetry(false);
@@ -340,7 +347,7 @@ export default function LabWorkbenchPage() {
         {guideVisible && (
           <section className={`${guideBasis} lg:grow lg:shrink min-h-0 rounded-lg border border-white/10 bg-black/30 overflow-y-auto flex flex-col`}>
             <div className="sticky top-0 z-10 flex gap-1 px-3 py-2 bg-black/70 backdrop-blur border-b border-white/10">
-              {(["exercise", "solution"] as const).map((p) => (
+              {(["exercise", "topology"] as const).map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -355,7 +362,21 @@ export default function LabWorkbenchPage() {
                 </button>
               ))}
             </div>
-            <GuidePane labId={lab.id} part={guidePart} />
+            {guidePart === "topology" ? (
+              devices ? (
+                <div className="flex-1 min-h-0 overflow-auto p-3">
+                  <TopologyDiagram
+                    devices={devices}
+                    onNodeClick={openNodeTerminal}
+                    className="w-full h-full"
+                  />
+                </div>
+              ) : (
+                <div className="p-6 text-sm text-white/50">Loading topology…</div>
+              )
+            ) : (
+              <GuidePane labId={lab.id} part="exercise" />
+            )}
           </section>
         )}
 
@@ -364,7 +385,7 @@ export default function LabWorkbenchPage() {
         >
           <TabbedTerminals
             ref={terminalsRef}
-            onRequestPickDevice={() => devices && setTopoOpen(true)}
+            onRequestPickDevice={openTopologyTab}
             emptyMessage={
               <span>
                 No terminals open yet. Click <strong className="text-white/70">Topology</strong> above (or the <strong className="text-white/70">+</strong> here) to pick a device.
@@ -380,24 +401,11 @@ export default function LabWorkbenchPage() {
         )}
       </div>
 
-      {topoOpen && devices && (
-        <TopologyOverlay
-          devices={devices}
-          onPickNode={openNodeTerminal}
-          onClose={() => setTopoOpen(false)}
-        />
-      )}
-
       {showResults && lastSummary && (
         <SubmitResultsDrawer
           result={lastSummary}
           onClose={() => setShowResults(false)}
           onRerun={onSubmit}
-          onRevealSolution={() => {
-            setGuidePart("solution");
-            setFocusTerminal(false);
-            setFocusTelemetry(false);
-          }}
         />
       )}
 
