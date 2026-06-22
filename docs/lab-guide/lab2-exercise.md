@@ -21,14 +21,6 @@ EVPN-VXLAN gives you both:
 
 This pattern is what every hyperscale AI fabric runs — Microsoft, Meta, Google internal, AWS HyperPod. Same control plane, same data plane, just at thousand-switch scale instead of six.
 
-### Get to the starting line
-
-Click **Start lab ▶** in the top bar. The orchestrator applies the canonical underlay (the same config you'd get from Lab 1's Solve) and tears down any overlay devices from a previous attempt. Within ~30 seconds the lab status pill flips to `In progress` and all BGP peers are Established under IPv4 unicast. You're starting from a healthy underlay; you're going to add the overlay on top.
-
-Open the **Topology** button or click **+** in the terminals pane to open any device's console.
-
----
-
 ## Step 1: Bring up the L2 segment on `leaf1` (via SONiC CLI)
 
 Click **Topology** → `leaf1`. New terminal tab.
@@ -43,19 +35,102 @@ ip -br link show | grep -E 'Vlan|vxlan|vtep'
 
 Expected: `show vxlan tunnel` says "no entries" or returns empty headers — no VXLAN tunnels configured yet. `ip -br link show` shows no `Vlan*` or `vtep*` devices. **The overlay is purely additive** — you're going to create new SONiC objects, leave the existing underlay alone.
 
-### Create the L2 segment, the VTEP, and the EVPN binding
+### Create the L2 segment, the VTEP, and the EVPN binding — one command at a time
 
-Run these five `config` commands directly at the shell (no `vtysh` for this part):
+Five `config` commands build the whole data plane (no `vtysh` for this part). Run them **one at a time** and watch the overlay grow on each leaf — the diagram after each command shows exactly what you just created.
+
+**1. Create the VLAN (the L2 segment).**
 
 ```sh
 config vlan add 1000
+```
+
+```
+leaf1
+  +---------------------+
+  | Bridge / VLAN 1000  |   <-- NEW: an empty L2 broadcast domain (one flat wire)
+  +---------------------+
+  no IP yet . no tunnel yet
+```
+
+SONiC creates the backing Linux bridge `Bridge` and `Vlan1000@Bridge` together — a VLAN *is* a bridge in SONiC's single-bridge model.
+
+**2. Add the SVI (an L3 interface on the segment).**
+
+```sh
 config interface ip add Vlan1000 192.168.100.1/24
+```
+
+```
+leaf1
+   Vlan1000  192.168.100.1/24   <-- NEW: SVI -- the L3 way in/out of the segment
+        |
+  +---------------------+
+  | Bridge / VLAN 1000  |
+  +---------------------+
+```
+
+This is the IP we ping from later, and in Lab 3 the GPU workers land in this same `192.168.100.0/24` subnet with this SVI as their first hop.
+
+**3. Create the VTEP (the VXLAN tunnel endpoint).**
+
+```sh
 config vxlan add vtep 10.0.10.1
+```
+
+```
+leaf1
+   Vlan1000  192.168.100.1/24
+        |
+  +---------------------+
+  | Bridge / VLAN 1000  |
+  +---------------------+
+
+  +---------------------------+
+  | vtep-1000  src 10.0.10.1  |   <-- NEW: encap endpoint (not wired to the VLAN yet)
+  +---------------------------+
+```
+
+The VTEP sources packets from this leaf's VTEP loopback `10.0.10.1` — already advertised by the Lab 1 underlay, so every other leaf can reach it.
+
+**4. Bind the VTEP to EVPN signaling.**
+
+```sh
 config vxlan evpn_nvo add nvo1 vtep
+```
+
+```
+  +-------------------------------------------+
+  | vtep-1000  src 10.0.10.1   EVPN-NVO: nvo1 |   <-- NEW: tunnel joins the EVPN control plane
+  +-------------------------------------------+
+```
+
+`evpn_nvo` is the flag that says "generate BGP L2VPN-EVPN routes for whatever rides this tunnel." Without it the tunnel exists but BGP never advertises it.
+
+**5. Map the VLAN onto the tunnel (VLAN 1000 ⇄ VNI 10100).**
+
+```sh
 config vxlan map add vtep 1000 10100
 ```
 
-That's the whole data-plane setup. Five SONiC primitives, five commands.
+```
+leaf1
+   Vlan1000  192.168.100.1/24
+        |
+  +---------------------+
+  | Bridge / VLAN 1000  |
+  +---------------------+
+        |
+        |  map: VLAN 1000 <--> VNI 10100   <-- NEW: bind the segment to the tunnel
+        v
+  +-------------------------------------------+
+  | vtep-1000  src 10.0.10.1   EVPN-NVO: nvo1 |
+  +-------------------------------------------+
+        |
+        v  VXLAN encap (UDP 4789, VNI 10100)  -->  underlay  -->  remote VTEPs
+```
+
+That's the whole data-plane setup — five SONiC primitives, five commands. The map is the keystone: it's what turns "a VLAN" and "a tunnel" into "this L2 segment travels the fabric as VNI 10100."
 
 > 💡 **What just happened under the hood**: each `config` command wrote an entry to SONiC's `config_db.json`. `swssconfig` picked the entries up and programmed the kernel: a Linux bridge named `Bridge`, a VLAN sub-interface `Vlan1000@Bridge`, and a VXLAN device `vtep-1000`. You can see the kernel objects with `ip -br link show`, and the SONiC view with `show vxlan tunnel`.
 
@@ -287,6 +362,30 @@ VNI: 10100
 ```
 
 The three `flood: HER` lines are the **head-end-replication targets** populated from the Type-3 inclusive-multicast routes EVPN exchanged — they tell the kernel "when you need to BUM-flood, send one copy to each of these VTEPs."
+
+Here's the overlay you just signaled into existence. From `leaf1`'s VTEP, EVPN learned the three remote VTEPs and wired a head-end-replication target for each:
+
+```
+                              +--> vtep 10.0.10.2  (leaf2)
+                              |
+   Vlan1000 --> vtep-1000 ----+--> vtep 10.0.10.3  (leaf3)
+   (VNI 10100)  10.0.10.1     |
+                              +--> vtep 10.0.10.4  (leaf4)
+```
+
+Across all four leaves it's a **full mesh** — a VXLAN tunnel between every pair of VTEPs, each one learned from BGP-EVPN (never statically configured):
+
+```
+       V1 ============= V2          V1 = vtep 10.0.10.1 (leaf1)
+       | \           / |            V2 = vtep 10.0.10.2 (leaf2)
+       |   \       /   |            V3 = vtep 10.0.10.3 (leaf3)
+       |     \   /     |            V4 = vtep 10.0.10.4 (leaf4)
+       |       X       |
+       |     /   \     |            Each line is a VXLAN tunnel
+       |   /       \   |            carrying VNI 10100 between two
+       | /           \ |            VTEPs (4 VTEPs -> 6 tunnels).
+       V3 ============= V4
+```
 
 <checkpoint name="remote_vteps_learned" label="Remote VTEPs visible to leaf1" />
 
