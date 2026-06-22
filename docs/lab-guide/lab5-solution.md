@@ -1,228 +1,135 @@
-# Solution — Super spines: worksheet answers + reference config
+# Solution — SRv6 uSID transport
 
-This is a conceptual lab. There's nothing to type, so there's nothing to copy-paste. What this doc has is:
+The complete, copy-pasteable build for all four leaves, plus a behavior reference and the failure modes most likely to bite you. This is exactly what clicking **Solve ✓** lays down (it applies the `_srv6` state).
 
-1. The **worksheet answers** for the radix math the exercise walks through.
-2. The **reference FRR config** a real super-spine tier would use — for when you want to see the actual BGP shape, not just discuss it.
-3. A **common-mistakes** table for the inspection checkpoints (the four most likely things that turn a passing check into a failing one).
+> Everything below is **additive**. None of it touches the IPv4 underlay or the EVPN-VXLAN overlay — those run unchanged the whole time. The IPv6 underlay (`fc00:<spine>:<leaf>::/127` links, IPv6 BGP, the `fcbb:bb00:<leaf>::/48` locator advertisements, and the seg6 sysctls) is pre-provisioned by **Start**; what follows is only the SRv6 layer you build on top.
 
 ---
 
-## 1 — Radix math worksheet
+## Per-leaf build
 
-The exercise asks you to plug into:
+For each `leafN`, the build is three parts: the **locator** (vtysh), the **endpoint** (kernel), and the **headend** (kernel). The only things that change between leaves are the digit `N` in the locator/endpoint and which service prefixes the headend steers.
 
-> **Max workers per pod = (leaf-facing ports per spine) × (worker-facing ports per leaf)**
+### leaf1 (locator `fcbb:bb00:1::/48`)
 
-For *this* lab's fabric:
+```sh
+# --- control plane: the uSID locator (vtysh) ---
+vtysh -c "conf t" \
+  -c "segment-routing" -c "srv6" -c "locators" \
+  -c "locator MAIN" \
+  -c "prefix fcbb:bb00:1::/48 block-len 32 node-len 16" \
+  -c "behavior usid" -c "end"
 
-| Quantity | Value | How you read it |
-|---|---|---|
-| Leaf-facing ports per spine | **4** | `ip -br link show` on spine1 → eth1..eth4 each go to a leaf |
-| Worker-facing ports per leaf | **2** | `ip -br link show` on leaf1 → eth1=spine1, eth2=spine2, eth3=gpu1, eth4=gpu2 |
-| **Max workers per pod** | **8** | 4 × 2 — your current pod is at its ceiling |
+# --- data plane: the End.DT6 endpoint (kernel, on a REAL device) ---
+ip link add srv6end type dummy 2>/dev/null || true
+ip link set srv6end up
+sysctl -w net.ipv6.conf.srv6end.seg6_enabled=1
+ip -6 route replace fcbb:bb00:1:fe00:: encap seg6local action End.DT6 table 255 dev srv6end
 
-For a real commodity 32-port-radix design:
+# --- data plane: the H.Encaps.Red headend, steering the other leaves' services ---
+ip -6 route replace fd00:100:2::/64 encap seg6 mode encap.red segs fcbb:bb00:2:fe00:: dev eth1
+ip -6 route replace fd00:100:3::/64 encap seg6 mode encap.red segs fcbb:bb00:3:fe00:: dev eth1
+ip -6 route replace fd00:100:4::/64 encap seg6 mode encap.red segs fcbb:bb00:4:fe00:: dev eth1
+```
 
-| Quantity | Value |
-|---|---|
-| Leaf-facing ports per spine | 32 (assuming all ports point at leaves) |
-| Worker-facing ports per leaf | 32 (assuming half the ports go up to spines, the other 32 to workers, on a 64-port leaf) |
-| **Max workers per pod** | **1024** |
+### leaf2 (locator `fcbb:bb00:2::/48`)
 
-That's the number you'll see quoted in every "this is what one pod of our AI fabric looks like" diagram. It isn't arbitrary — it falls out of the radix you bought.
+```sh
+vtysh -c "conf t" \
+  -c "segment-routing" -c "srv6" -c "locators" \
+  -c "locator MAIN" \
+  -c "prefix fcbb:bb00:2::/48 block-len 32 node-len 16" \
+  -c "behavior usid" -c "end"
 
-For 256-port silicon (modern hyperscaler-class):
+ip link add srv6end type dummy 2>/dev/null || true
+ip link set srv6end up
+sysctl -w net.ipv6.conf.srv6end.seg6_enabled=1
+ip -6 route replace fcbb:bb00:2:fe00:: encap seg6local action End.DT6 table 255 dev srv6end
 
-| Quantity | Value |
-|---|---|
-| Leaf-facing ports per spine | 256 |
-| Worker-facing ports per leaf | 256 |
-| **Max workers per pod** | **65,536** |
+ip -6 route replace fd00:100:1::/64 encap seg6 mode encap.red segs fcbb:bb00:1:fe00:: dev eth1
+ip -6 route replace fd00:100:3::/64 encap seg6 mode encap.red segs fcbb:bb00:3:fe00:: dev eth1
+ip -6 route replace fd00:100:4::/64 encap seg6 mode encap.red segs fcbb:bb00:4:fe00:: dev eth1
+```
 
-Still bounded, just by a bigger number. The super spine is what lets a fabric carry *more* than this in a single failure-isolated cluster.
+### leaf3 (locator `fcbb:bb00:3::/48`)
+
+```sh
+vtysh -c "conf t" \
+  -c "segment-routing" -c "srv6" -c "locators" \
+  -c "locator MAIN" \
+  -c "prefix fcbb:bb00:3::/48 block-len 32 node-len 16" \
+  -c "behavior usid" -c "end"
+
+ip link add srv6end type dummy 2>/dev/null || true
+ip link set srv6end up
+sysctl -w net.ipv6.conf.srv6end.seg6_enabled=1
+ip -6 route replace fcbb:bb00:3:fe00:: encap seg6local action End.DT6 table 255 dev srv6end
+
+ip -6 route replace fd00:100:1::/64 encap seg6 mode encap.red segs fcbb:bb00:1:fe00:: dev eth1
+ip -6 route replace fd00:100:2::/64 encap seg6 mode encap.red segs fcbb:bb00:2:fe00:: dev eth1
+ip -6 route replace fd00:100:4::/64 encap seg6 mode encap.red segs fcbb:bb00:4:fe00:: dev eth1
+```
+
+### leaf4 (locator `fcbb:bb00:4::/48`)
+
+```sh
+vtysh -c "conf t" \
+  -c "segment-routing" -c "srv6" -c "locators" \
+  -c "locator MAIN" \
+  -c "prefix fcbb:bb00:4::/48 block-len 32 node-len 16" \
+  -c "behavior usid" -c "end"
+
+ip link add srv6end type dummy 2>/dev/null || true
+ip link set srv6end up
+sysctl -w net.ipv6.conf.srv6end.seg6_enabled=1
+ip -6 route replace fcbb:bb00:4:fe00:: encap seg6local action End.DT6 table 255 dev srv6end
+
+ip -6 route replace fd00:100:1::/64 encap seg6 mode encap.red segs fcbb:bb00:1:fe00:: dev eth1
+ip -6 route replace fd00:100:2::/64 encap seg6 mode encap.red segs fcbb:bb00:2:fe00:: dev eth1
+ip -6 route replace fd00:100:3::/64 encap seg6 mode encap.red segs fcbb:bb00:3:fe00:: dev eth1
+```
 
 ---
 
-## 2 — Reference FRR config (what a super-spine tier *would* look like)
+## Command ↔ behavior reference
 
-If this platform deployed `supersp1` and `supersp2` containers above the current spines, this is the FRR config they (and the spines) would run. Every block follows patterns you already used in Labs 1 and 2 — same `peer-group` discipline, same shared-AS-tier teaching choice ([ADR-002](../../notes/decisions.md)), same numbered /31 addressing ([ADR-001](../../notes/decisions.md)).
+| What you typed | Layer | SRv6 behavior | What it does |
+|---|---|---|---|
+| `locator MAIN ... behavior usid` (vtysh) | control plane | — | declares this leaf owns `fcbb:bb00:N::/48`, sliced as uSID (block 32 / node 16) |
+| `... encap seg6local action End.DT6 ... dev srv6end` | data plane | **End.DT6** (uN/uDT6) | decapsulate a uSID packet for this leaf, look the inner up in the local table (255), deliver |
+| `... encap seg6 mode encap.red segs <uSID>` | data plane | **H.Encaps.Red** | wrap a flow into one uSID in the outer IPv6 DA (no SRH); the headend |
+| (pre-provisioned) `network fcbb:bb00:N::/48` in IPv6 BGP | control plane | — | advertises the locator so the fabric routes to it via both spines (ECMP) |
+| (pre-provisioned) `net.ipv6.seg6_flowlabel=1` | data plane | — | derive the outer flow label from the inner flow → per-flow ECMP |
 
-### IP allocation
+### How to verify each piece
 
-```
-supersp1 lo  : 10.0.0.101/32
-supersp2 lo  : 10.0.0.102/32
-
-supersp1 ↔ spine1   10.3.1.0/31    (supersp1 .0,  spine1 .1)
-supersp1 ↔ spine2   10.3.1.2/31    (supersp1 .2,  spine2 .3)
-supersp2 ↔ spine1   10.3.2.0/31    (supersp2 .0,  spine1 .1)
-supersp2 ↔ spine2   10.3.2.2/31    (supersp2 .2,  spine2 .3)
-```
-
-`10.3.0.0/16` is the next clean /16 — `10.0.x.x` is loopbacks, `10.1.x.x` is spine↔leaf, `10.2.x.x` is worker /31s ([`workers/entrypoint.sh`](../../workers/entrypoint.sh)), `192.168.100.0/24` is overlay.
-
-### `supersp1/frr.conf`
-
-```
-frr defaults datacenter
-hostname supersp1
-log syslog informational
-service integrated-vtysh-config
-!
-interface lo
- ip address 10.0.0.101/32
-!
-interface eth1
- description to_spine1
- ip address 10.3.1.0/31
-!
-interface eth2
- description to_spine2
- ip address 10.3.1.2/31
-!
-router bgp 64999
- bgp router-id 10.0.0.101
- bgp bestpath as-path multipath-relax
- no bgp default ipv4-unicast
- neighbor SPINES peer-group
- neighbor SPINES advertisement-interval 0
- neighbor SPINES timers 3 9
- neighbor 10.3.1.1 remote-as 65000
- neighbor 10.3.1.1 peer-group SPINES
- neighbor 10.3.1.1 description spine1
- neighbor 10.3.1.3 remote-as 65000
- neighbor 10.3.1.3 peer-group SPINES
- neighbor 10.3.1.3 description spine2
- !
- address-family ipv4 unicast
-  network 10.0.0.101/32
-  maximum-paths 64
-  neighbor SPINES activate
-  neighbor SPINES soft-reconfiguration inbound
- exit-address-family
-!
-line vty
-!
+```sh
+vtysh -c "show segment-routing srv6 locator"      # locator MAIN, Up, behavior uSID
+ip -6 -s route show fcbb:bb00:3:fe00::            # End.DT6 endpoint + a climbing packet counter
+ip -6 route show fd00:100:3::/64                  # headend: "encap seg6 ... segs fcbb:bb00:3:fe00::"
+vtysh -c "show ipv6 route fcbb:bb00:3::/48"       # remote locator via TWO nexthops (ECMP)
+ping6 -c3 -I fd00:100:1::1 fd00:100:3::1          # end-to-end over the uSID transport
 ```
 
-### `supersp2/frr.conf`
-
-```
-frr defaults datacenter
-hostname supersp2
-log syslog informational
-service integrated-vtysh-config
-!
-interface lo
- ip address 10.0.0.102/32
-!
-interface eth1
- description to_spine1
- ip address 10.3.2.0/31
-!
-interface eth2
- description to_spine2
- ip address 10.3.2.2/31
-!
-router bgp 64999
- bgp router-id 10.0.0.102
- bgp bestpath as-path multipath-relax
- no bgp default ipv4-unicast
- neighbor SPINES peer-group
- neighbor SPINES advertisement-interval 0
- neighbor SPINES timers 3 9
- neighbor 10.3.2.1 remote-as 65000
- neighbor 10.3.2.1 peer-group SPINES
- neighbor 10.3.2.1 description spine1
- neighbor 10.3.2.3 remote-as 65000
- neighbor 10.3.2.3 peer-group SPINES
- neighbor 10.3.2.3 description spine2
- !
- address-family ipv4 unicast
-  network 10.0.0.102/32
-  maximum-paths 64
-  neighbor SPINES activate
-  neighbor SPINES soft-reconfiguration inbound
- exit-address-family
-!
-line vty
-!
-```
-
-### `spine1/frr.conf` additions
-
-The spine config from [`configs/frr/_overlay_workers/spine1/frr.conf`](../../configs/frr/_overlay_workers/spine1/frr.conf) gains two new interface blocks and a `SUPERSPINES` peer-group — everything else (the LEAVES block, the EVPN AF) stays as-is.
-
-```
-! Existing _overlay_workers config unchanged above.
-
-interface eth5
- description to_supersp1
- ip address 10.3.1.1/31
-!
-interface eth6
- description to_supersp2
- ip address 10.3.2.1/31
-!
-router bgp 65000
- ! ... existing LEAVES peer-group block unchanged ...
- neighbor SUPERSPINES peer-group
- neighbor SUPERSPINES advertisement-interval 0
- neighbor SUPERSPINES timers 3 9
- neighbor 10.3.1.0 remote-as 64999
- neighbor 10.3.1.0 peer-group SUPERSPINES
- neighbor 10.3.1.0 description supersp1
- neighbor 10.3.2.0 remote-as 64999
- neighbor 10.3.2.0 peer-group SUPERSPINES
- neighbor 10.3.2.0 description supersp2
- !
- address-family ipv4 unicast
-  ! ... existing LEAVES activate / network blocks unchanged ...
-  neighbor SUPERSPINES activate
-  neighbor SUPERSPINES soft-reconfiguration inbound
- exit-address-family
- ! Note: SUPERSPINES are NOT activated under address-family l2vpn evpn.
- ! Super spines transit the underlay; EVPN signaling stays inside the pod.
-```
-
-Spine2's additions are symmetric — eth5: `10.3.1.3/31` to supersp1, eth6: `10.3.2.3/31` to supersp2; SUPERSPINES neighbors `10.3.1.2` and `10.3.2.2`.
-
-### Notable design choices
-
-- **Shared AS 64999** for both super spines. Same teaching choice as your two spines today (ADR-002). Standard eBGP own-AS rejection prevents loops; no `allowas-in` needed. Production designs sometimes use per-super-spine ASNs for traffic engineering — out of scope here.
-- **EVPN AF deliberately off** on the super-spine tier. The thesis is underlay scaling. A multi-pod EVPN design adds route-reflector and RT-filtering questions that don't fit this lab. The underlay still carries the next-hop reachability EVPN needs end-to-end.
-- **`maximum-paths 64`** on both tiers — same as your existing fabric (per ADR-001 / the existing canonical configs). Enables the ECMP picture you'd want.
+The **packet counter** on the endpoint (`ip -6 -s route show <sid>`) is the single most reliable signal — `ip -6 route show` alone does not always render the `encap` attributes in this image, but the counter never lies: if it climbs, the leaf is decapsulating.
 
 ---
 
-## 3 — Common mistakes for the inspection checkpoints
-
-The Lab 5 checkpoints inspect the existing healthy fabric, so they should pass against any Lab-4-solved state. When they don't, the failure is almost never about Lab 5 itself — it's about the fabric being in a non-healthy state. Top causes, in priority order:
+## Common mistakes (in priority order)
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Checkpoint 1 (`fabric_healthy_two_tier`) fails — one or more switches missing Established peers | A BGP session dropped (most often: someone in a previous lab session left a switch with a half-applied config; less often: SONiC's gNMI-feature toggle wiped overlay state per CLAUDE.md pitfall #15) | **Reset ↺** to re-apply `_overlay_workers`. If still broken, run `make fabric-bootstrap` from the host. |
-| Checkpoint 3 (`per_pod_ecmp_observed`) fails with "1 active nexthop" instead of 2 | One of leaf1's spine sessions is down. Failing-but-Established sessions are rare; usually one whole session has dropped — Checkpoint 1 will have caught it. If both spine sessions look Established but ECMP still reports 1 path, it's likely a transient BGP table churn — wait ~10s and re-check | Re-click Check. If persistent, **Reset ↺**. |
-| Checkpoint 3 fails with "leaf1 has no route to 10.0.10.3" | leaf3 dropped its loopback advertisement — almost always means leaf3's BGP session to one (or both) spines is down | **Reset ↺**, wait 30s, re-check |
-| Submit ✓ runs but the ping mesh reports <56 OK | Worker eth1 IPs are not on `192.168.100.0/24` — usually means a previous Lab-1 session reset workers to /31 underlay and the orchestrator hasn't re-applied Lab-4's `solve_extra` since. (Lab 5 BOOTSTRAP doesn't run Lab 4's worker-overlay setup, so if Lab 4 wasn't the last-solved lab, workers are in the wrong state.) | Click into **Lab 4**, click **Solve**, then come back to Lab 5 |
-| One worker (e.g. gpu7) is the only one failing pings in the mesh | That worker's eth1 lost its overlay IP (manual edit in a console session is the usual culprit) | Open the gpu's console, run `ip addr add 192.168.100.<10+id>/24 dev eth1 && ip link set eth1 up` — or just click **Lab 4 → Solve** to re-apply all 8 worker IPs |
-| `vtysh -c "show ip route 10.0.10.3 json"` returns no output | FRR-on-SONiC sometimes takes a moment to populate the JSON view after a fresh `vtysh -b`. If the non-JSON form (`show ip route 10.0.10.3`) returns a B>* line, the route is there — just retry the JSON form after a few seconds | Retry, or use the non-JSON form to confirm by eye |
+| Endpoint check fails; uSID pings return *"destination unreachable"*; `ip route show <sid>` shows a plain route with no `encap` | **The `End.DT6` endpoint was bound to `dev lo`.** A lo-bound seg6local route is silently accepted with no lwtunnel attached — it does nothing. This is *the* SRv6 gotcha. | Delete it and re-add on a real device: `ip -6 route del <sid>; ip -6 route replace <sid> encap seg6local action End.DT6 table 255 dev srv6end`. Confirm `srv6end` exists and is `up`. |
+| `srv6_path_works` fails; the **endpoint counter on leaf3 climbs** (decap *is* happening) but the ping still reports 100% loss | **No symmetric return headend.** leaf3 decapsulates fine, but its reply to `fd00:100:1::1` has no SRv6 path back because leaf3 is missing a headend for `fd00:100:1::/64`. | Add the return headend on the egress leaf: `ip -6 route replace fd00:100:1::/64 encap seg6 mode encap.red segs fcbb:bb00:1:fe00:: dev eth1`. Every leaf needs headends for the *other three*. |
+| uSID pings fail with no decap at all; the far leaf's endpoint counter stays 0 | **Headend points at the wrong uSID**, or the **service source wasn't specified.** Either the `segs` value doesn't match the destination leaf's endpoint SID, or you pinged without `-I fd00:100:N::1` and sourced from a link address the far leaf can't route back to. | Check the headend `segs` equals the destination leaf's `fcbb:bb00:<dst>:fe00::`, and always `ping6 -I fd00:100:<self>::1 ...`. |
+| `srv6_locators_configured` passes but everything downstream is reachable via only **one** spine (ECMP shows 1 nexthop) | **An IPv6 BGP session is down** (a leaf↔spine `/127` mismatch or a flapped session), so a locator is learned via only one path. | `vtysh -c "show bgp ipv6 unicast summary"` on the leaf — both spine sessions must be Established. If not, click **Reset** to re-apply the clean dual-stack underlay. |
+| Locator shows `Up` but traffic to it is dropped at the *owning* leaf | **Endpoint SID doesn't fall inside the locator `/48`.** e.g. the locator is `fcbb:bb00:1::/48` but the endpoint was typed `fcbb:bb00:2:fe00::`. The leaf advertises one block but decapsulates a different one. | Make the endpoint SID `fcbb:bb00:<N>:fe00::` match the leaf's own locator digit `N`. |
 
 ---
 
-## 4 — Want to revert?
+## Reset / re-solve
 
-Click **Solve** or **Reset** — both re-apply the `_overlay_workers` baseline. No-op on a conceptual lab.
+- **Reset** re-applies `_srv6_skeleton`: it runs the bootstrap teardown (removes `srv6end` and any seg6 routes), then lays the clean dual-stack underlay back down. You're returned to the Step-1 starting point with no SRv6 layer. IPv4 + VXLAN are never touched.
+- **Solve** applies `_srv6`: the full build above, on all four leaves, in one shot.
 
-Confirm:
-
-```sh
-docker exec leaf1 vtysh -c "show bgp ipv4 unicast summary" | grep '^10\.' | wc -l   # expect 2
-docker exec spine1 vtysh -c "show bgp ipv4 unicast summary" | grep '^10\.' | wc -l  # expect 4
-docker exec gpu1 ping -c1 -W2 192.168.100.13                                         # expect OK
-```
-
-(Without the `ipv4 unicast` AF qualifier, FRR prints both the IPv4 unicast and L2VPN-EVPN summary blocks and the count doubles.)
-
-Then click **Start ▶** to begin Lab 5 again, or move forward to **Lab 6** when it ships.
+Then click **Start ▶** to build it yourself again, or move on to **Lab 6 — Super Spines** when you're ready.

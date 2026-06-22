@@ -309,6 +309,31 @@ That blast radius is **disproportionate to the pedagogical payoff** when the dep
 
 **Reversion path:** Replace the lab id `"5"` entry in `orchestrator/api/labs.json` with a pre-Lab-5 version of itself, drop `lab5` from `labruns.py::_LAB_MODULES` and the `from .checkpoints import ... lab5` line, delete `orchestrator/api/checkpoints/lab5.py` and the three `docs/lab-guide/lab5-*.md` files, undo the two README phrasing edits, restore the failure-injection lab's id back to `"5"`. No fabric / topology / FRR state was changed — clean reversal.
 
+> **Superseded for numbering by ADR-014:** SRv6 was later inserted as Lab 5, so super spines renumbered to id `"6"` (content `lab5-*.md` → `lab6-*.md`, `checkpoints/lab5.py` → `lab6.py`) and the failure lab to id `"7"`. The conceptual-vs-deployed decision above still stands.
+
+---
+
+## ADR-014 — Lab 5: SRv6 uSID transport, additive dual-stack, leaves-as-endpoints
+**Date:** 2026-06-22
+
+**Decision:** Lab 5 ("SRv6 uSID Transport + ECMP") is a **deployed, hands-on** lab that lays a Segment Routing over IPv6 (SRv6) micro-SID transport across the existing fabric, **additive** alongside the IPv4 underlay + EVPN-VXLAN overlay (both stay fully intact). It is inserted at id `"5"`; super spines renumbers `5 → 6`, failure injection `6 → 7`.
+
+- `BOOTSTRAP_STATE = _srv6_skeleton` = `_overlay_workers` + a pre-provisioned IPv6 dual-stack underlay (`fc00:<spine>:<leaf>::/127` links, an IPv6 BGP session per link, each leaf's uSID locator `fcbb:bb00:<leaf>::/48` advertised with `maximum-paths 64` so it is reachable via **both** spines = ECMP). No SRv6 dataplane yet — the IPv6 underlay is the "given" (Lab-1-style), the learner builds the SRv6 layer.
+- `SOLVE_STATE = _srv6` = skeleton + FRR uSID locators (`behavior usid`) + the kernel dataplane in `overlay-setup.sh`: an `End.DT6` endpoint per leaf (decap) on a dedicated `srv6end` dummy, and H.Encaps.Red headend routes steering each remote leaf's service prefix (`fd00:100:<leaf>::/64`) into that leaf's uSID.
+- The lab reuses Lab 4's Grafana dashboard (`grafana_dashboard_path`) — the netdev exporter counts bytes per spine veth regardless of encapsulation, so uSID traffic's per-flow ECMP spread renders just like VXLAN's.
+
+**Why this shape (the spike findings):**
+
+A live spike on the fabric (sonic-vs 202511 / FRR 10.4.1 / host kernel 6.8) established what actually works:
+
+- **SRv6 headend encap + IPv6 transit + ECMP: work** on the SONiC leaves/spines (confirmed on the wire — uSID packets transit a spine and arrive at the egress leaf).
+- **SRv6 `seg6local` endpoints work too — but ONLY when bound to a real device, never `lo`.** A `dev lo` seg6local route silently fails to attach (no lwtunnel; uSID packets get `ICMP destination-unreachable`); on a real device (`srv6end` dummy) it decaps correctly (verified via the seg6local packet counter). This was initially misdiagnosed as an iproute2-6.1.0 limitation in the SONiC image and almost led to an unnecessary image-upgrade pipeline; it was purely the `dev lo` gotcha. See CLAUDE.md pitfalls #19–21.
+- FRR 10.4 accepts the locator config but does **not** auto-program the kernel endpoint from the locator alone, so Lab 5 programs the dataplane directly in the kernel (the same pattern Lab 2/3 use for VXLAN). No `topo/aidc.clab.yml` change — the SRv6 kernel bits ride the existing `overlay-setup.sh` bind-mount; `bootstrap-switch.sh` enables the seg6 / IPv6-forwarding / IPv6-multipath-hash / seg6_flowlabel sysctls globally and tears down stale SRv6 state on Reset.
+
+**Considered and rejected:** *host-based SRv6* (GPU workers as endpoints, fabric as pure transit) — viable but would have moved workers off the VXLAN overlay onto a routed dual-stack, i.e. not additive. *Image upgrade for newer iproute2* — unnecessary once the `dev lo` cause was found. *Conceptual-only* (ADR-013 style) — the dataplane genuinely works, so a hands-on lab is the higher-value choice here.
+
+**Reversion path:** Delete `configs/frr/_srv6` + `configs/frr/_srv6_skeleton`, `orchestrator/api/checkpoints/lab5.py`, `docs/lab-guide/lab5-*.md`; revert the `lab5`/`lab6` wiring in `labruns.py`; restore super spines to id `"5"` (rename `lab6.py`/`lab6-*.md` back); revert the `bootstrap-switch.sh` seg6 additions; undo the labs.json / README / CLAUDE.md renumber. `topo/aidc.clab.yml` was never touched.
+
 ---
 
 ## Pending decisions

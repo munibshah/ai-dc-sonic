@@ -85,16 +85,39 @@
   },
   {
     "id": "5",
-    "title": "Super Spines — Beyond a Single-Pod CLOS",
-    "summary": "Walk the math behind multi-pod AI fabrics: when does a 2-tier CLOS run out of room, what does the third tier look like in BGP, and why do hyperscalers schedule training jobs to live inside a pod when they can? Conceptual lab — no super spines are deployed; you inspect your existing fabric to anchor each point.",
+    "title": "SRv6 uSID Transport + ECMP",
+    "summary": "Lay a Segment Routing over IPv6 (SRv6) uSID transport across the fabric, additive alongside the IPv4 underlay and EVPN-VXLAN overlay you already built. Define micro-SID locators in FRR, program kernel End.DT6 endpoints so each leaf decapsulates, steer flows into uSID with an H.Encaps headend — then watch distinct flows spread per-flow across both spines on the IPv6 flow label, the SRv6 analog of the VXLAN ECMP you saw in Lab 4.",
     "status": "active",
-    "duration_min": 30,
-    "checkpoint_count": 4,
+    "duration_min": 45,
+    "checkpoint_count": 6,
     "previous_lab_id": "4",
     "next_lab_id": "6",
     "exercise_path": "docs/lab-guide/lab5-exercise.md",
     "solution_path": "docs/lab-guide/lab5-solution.md",
     "overview_path": "docs/lab-guide/lab5-overview.md",
+    "learning_objectives": [
+      "SRv6 and the uSID (micro-segment) compressed SID format — block / node / function bits",
+      "Dual-stacking a live fabric — an IPv6 underlay + BGP added alongside the IPv4 / VXLAN you built",
+      "FRR SRv6 locators as the control-plane object (behavior usid)",
+      "Kernel End.DT6 endpoints — and why seg6local must bind to a real device, never lo",
+      "H.Encaps.Red headend — steering a flow into a single uSID with no SRH overhead",
+      "Per-flow ECMP via the IPv6 flow label — how SRv6 load-spreads collective traffic across spines",
+      "SRv6 vs VXLAN as an AI-fabric transport — what each buys you"
+    ],
+    "grafana_dashboard_path": "/d/aidc-lab4/aidc-lab-4-fabric-traffic?orgId=1&refresh=5s&from=now-5m&to=now&kiosk=tv"
+  },
+  {
+    "id": "6",
+    "title": "Super Spines — Beyond a Single-Pod CLOS",
+    "summary": "Walk the math behind multi-pod AI fabrics: when does a 2-tier CLOS run out of room, what does the third tier look like in BGP, and why do hyperscalers schedule training jobs to live inside a pod when they can? Conceptual lab — no super spines are deployed; you inspect your existing fabric to anchor each point.",
+    "status": "active",
+    "duration_min": 30,
+    "checkpoint_count": 4,
+    "previous_lab_id": "5",
+    "next_lab_id": "7",
+    "exercise_path": "docs/lab-guide/lab6-exercise.md",
+    "solution_path": "docs/lab-guide/lab6-solution.md",
+    "overview_path": "docs/lab-guide/lab6-overview.md",
     "learning_objectives": [
       "Switch radix → pod ceiling — why 32-port silicon caps a pod at ~1024 GPUs",
       "When hyperscalers add a 3rd tier (super spines) — multi-pod scale, fault-domain isolation, multi-tenant separation",
@@ -104,11 +127,11 @@
     ]
   },
   {
-    "id": "6",
+    "id": "7",
     "title": "Inject Failure During AllReduce",
     "summary": "Kick off a long AllReduce across all 8 GPUs, then drop a spine ↔ leaf link mid-run. Watch BGP and EVPN reconverge while the collective keeps going (or doesn't). See how fabric resilience translates directly into training-job continuity.",
     "status": "coming-soon",
     "duration_min": 45,
-    "previous_lab_id": "5"
+    "previous_lab_id": "6"
   }
 ]

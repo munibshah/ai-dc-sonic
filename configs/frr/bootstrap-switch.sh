@@ -22,9 +22,11 @@
 
 set -e
 
-# 1. Bring up fabric veths.
+# 1. Bring up fabric veths. Also turn on per-link IPv6 seg6 acceptance so the
+#    switch can receive SRv6 (Lab 5); harmless no-op for the IPv4-only labs.
 for i in 1 2 3 4; do
   ip link set "eth${i}" up 2>/dev/null || true
+  sysctl -w "net.ipv6.conf.eth${i}.seg6_enabled=1" >/dev/null 2>&1 || true
 done
 
 # 1b. Per-flow ECMP for VXLAN underlay. Linux default
@@ -38,6 +40,23 @@ done
 #     it's the difference between a fabric that load-spreads and one that
 #     looks like it works in basic tests but pins per-pair.
 sysctl -w net.ipv4.fib_multipath_hash_policy=1 >/dev/null 2>&1 || true
+
+# 1c. SRv6 dual-stack (Lab 5). Enable IPv6 forwarding + seg6 processing so the
+#     switch can transit AND terminate SRv6 uSID traffic, and turn on IPv6 ECMP
+#     hashing keyed on the flow label. Linux derives the outer SRv6 packet's
+#     flow label from the inner flow (seg6_flowlabel=1), so per-flow flow-label
+#     entropy spreads uSID traffic across both spines — the IPv6 twin of the
+#     VXLAN UDP-src-port trick above.
+#     NOTE policy=0 (NOT 1): for IPv6, policy 0 = "L3 + flow label", which is
+#     what we need. Policy 1 ("L4") tries to read L4 ports, but the outer uSID
+#     packet is IPv6-in-IPv6 (next-header 41) with no L4 ports, so it falls back
+#     to a constant hash and pins every flow to one spine (verified empirically).
+#     All harmless no-ops for the IPv4-only Labs 1-4 (no IPv6 routes to forward).
+sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.all.seg6_enabled=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.default.seg6_enabled=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.fib_multipath_hash_policy=0 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.seg6_flowlabel=1 >/dev/null 2>&1 || true
 
 # 2. Overlay teardown (always runs). Removes any prior Lab 2 / Lab 3 SONiC
 #    overlay state so the next step starts from a clean slate. `|| true`
@@ -58,6 +77,16 @@ sysctl -w net.ipv4.fib_multipath_hash_policy=1 >/dev/null 2>&1 || true
 for IFACE in eth3 eth4; do
   ip link set "$IFACE" nomaster 2>/dev/null || true
 done
+
+# SRv6 (Lab 5) teardown: drop any seg6 headend/endpoint routes a prior lab run
+# installed, then remove the endpoint dummy. Routes are matched by their prefix
+# from `ip -6 route show`; deleting srv6end also drops the seg6local route bound
+# to it. No-op for labs that never set up SRv6.
+for P in $(ip -6 route show 2>/dev/null | awk '/encap seg6/ {print $1}'); do
+  ip -6 route del "$P" 2>/dev/null || true
+done
+ip link del srv6end 2>/dev/null || true
+
 config vxlan map del vtep 1000 10100 2>/dev/null || true
 config vxlan evpn_nvo del nvo1 2>/dev/null || true
 config vxlan del vtep 2>/dev/null || true

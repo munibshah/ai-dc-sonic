@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Iterator, TypedDict
 
-from .checkpoints import lab1, lab2, lab3, lab4, lab5
+from .checkpoints import lab1, lab2, lab3, lab4, lab5, lab6
 from .dockerlib import docker_exec, vtysh, count_established  # noqa: F401  (re-export)
 
 REPO_ROOT = Path(os.environ.get("AIDC_REPO_ROOT", "/repo"))
@@ -79,7 +79,8 @@ _LAB_MODULES = {
     "2": lab2,
     "3": lab3,
     "4": lab4,
-    "5": lab5,
+    "5": lab5,  # SRv6 uSID Transport + ECMP
+    "6": lab6,  # Super Spines (conceptual)
 }
 _REGISTRY: dict[str, list[tuple[str, str, Callable[[], tuple[bool, str, str | None]]]]] = {
     lab_id: mod.CHECKPOINTS for lab_id, mod in _LAB_MODULES.items()

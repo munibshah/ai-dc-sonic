@@ -1,19 +1,43 @@
-# Lab Guide 5 — Super Spines: beyond a single-pod CLOS
+# Lab Guide 5 — Build an SRv6 uSID transport across your fabric
 
-In [Lab 1](00-overview.md) you built a 2-tier CLOS. In [Labs 2–3](lab2-overview.md) you stretched a single L2 segment across it and ran a real AllReduce on top. In [Lab 4](lab4-overview.md) you watched the per-link Mbps fill in as the collective ran.
+In Labs 1–4 you built an IPv4 CLOS underlay, stretched an EVPN-VXLAN overlay across it, put GPUs on that overlay, and watched real AllReduce traffic light up a telemetry dashboard. Everything so far rides **one** transport: VXLAN-over-IPv4-UDP.
 
-Everything you've built so far fits inside a single **pod**. Two spines, four leaves, eight workers — one rectangle of bandwidth. That rectangle has a hard ceiling: the **radix** of the switches it's built from. Once you run out of leaf-facing ports on the spines, the only way to grow is **up** — add a third tier above the spines.
+This lab introduces a **second, modern transport — SRv6 (Segment Routing over IPv6)** — and lays it down **additively, alongside** what you already have. Your IPv4 underlay and your EVPN-VXLAN overlay keep running untouched. On top of them you'll dual-stack the fabric with IPv6, define **micro-SID (uSID)** locators, and build an SRv6 transport that carries leaf-to-leaf traffic and — the payoff — **load-spreads per-flow across both spines using the IPv6 flow label**, exactly the way VXLAN did in Lab 4, but with a completely different encapsulation.
 
-That third tier is the **super spine**. This lab walks through what it is, when hyperscalers actually reach for it, what its BGP plane looks like, and why it matters for AI training fabrics specifically. Then you'll inspect your existing 2-tier fabric to ground the math.
+By the end, a packet from a host behind `leaf1` to a host behind `leaf3` will be wrapped in an SRv6 uSID, ECMP'd across spine1 **and** spine2 on a per-flow basis, decapsulated by `leaf3`, and delivered — and you'll watch the spread fill in on the same Grafana dashboard from Lab 4.
 
-> **What this lab is — and isn't.** Lab 5 is a **conceptual lab**. There are no super-spine containers deployed in this platform; the existing 2-spine / 4-leaf / 8-worker pod is the surface you'll discuss against. You'll read, run a few `show` commands to anchor the math, and click through three inspection checkpoints. There's nothing to type and break. The "Solve ✓" button is a no-op re-apply of the same baseline. See [`notes/decisions.md`](../../notes/decisions.md) ADR-013 for the rationale.
+> **Note**: this lab is **leaf-and-spine, additive**. The IPv6 underlay (links + BGP + locator reachability) is **pre-provisioned** for you when you Start — the same way Lab 1 pre-provisioned interface IPs so you could focus on BGP. Your job is the **SRv6 layer**: locators, endpoints, and headend steering. The IPv4 underlay, the VXLAN overlay, and the GPU workers on `192.168.100.0/24` are all still there and still working the whole time.
 
-By the end of this lab you'll be able to answer, on a whiteboard:
+---
 
-1. Why does any AI fabric ever need more than a 2-tier CLOS?
-2. At what scale does a 2-tier CLOS stop being enough?
-3. What does the third tier look like — physically, in BGP, and in failure semantics?
-4. What changes for the workload (NCCL/Gloo collectives) when traffic crosses pods vs. stays inside one?
+## SRv6 in one minute
+
+Classic Segment Routing puts an ordered list of "segments" (instructions) into the packet header and lets each hop pop the next one. **SRv6** encodes those segments as **IPv6 addresses** — so the segment list is just an IPv6 routing header (SRH), and *every* router in between is a plain IPv6 router that forwards on the outer destination address. No new data plane, no LDP, no MPLS label distribution. The fabric you already have forwards SRv6 the moment you turn on IPv6.
+
+**uSID (micro-SID)** is the compressed flavor. Instead of a full 128-bit IPv6 address per segment, a uSID is a short (here, 16-bit) "micro-instruction" packed into a **uSID container** — a single IPv6 address that can hold a *sequence* of them. For a one-hop path like ours, the whole instruction rides in the outer IPv6 **destination address** with **no SRH at all** (this is *H.Encaps.Red* — "reduced"). That's why SRv6 uSID has tiny header overhead and is what hyperscalers actually deploy.
+
+Three roles, three places in the fabric:
+
+| Role | SRv6 term | Who does it here | What it does |
+|---|---|---|---|
+| **Headend** | H.Encaps.Red | the ingress leaf | wraps a flow into a uSID (sets the outer IPv6 DA = the remote leaf's uSID) |
+| **Transit** | plain IPv6 forwarding | the spines | route the outer IPv6 DA toward the egress leaf — **ECMP on the flow label** |
+| **Endpoint** | `End.DT6` (uN/uDT6) | the egress leaf | matches its own uSID, **decapsulates**, delivers the inner packet |
+
+---
+
+## The addressing scheme (pre-provisioned for you)
+
+You don't have to invent any of this — it's laid down for you at Start. Keep it handy:
+
+| Element | Value | Notes |
+|---|---|---|
+| IPv6 link `/127` | `fc00:<spine>:<leaf>::/127` | spine side `::0`, leaf side `::1`. e.g. spine1↔leaf3 = `fc00:1:3::/127` |
+| uSID **locator** | `fcbb:bb00:<leaf>::/48` | block-len 32 + node-len 16. e.g. leaf3 = `fcbb:bb00:3::/48` |
+| **End.DT6** endpoint SID | `fcbb:bb00:<leaf>:fe00::` | the address this leaf decapsulates on |
+| **Service** prefix | `fd00:100:<leaf>::/64` | "the hosts behind this leaf"; `fd00:100:<leaf>::1` is a concrete host you can ping |
+
+`fcbb:bb00::/32` is the conventional SRv6 uSID block (the same shape Cisco/Arista docs use). Every leaf's `/48` locator is advertised into IPv6 BGP with `maximum-paths 64`, so each leaf learns every other leaf's locator via **both** spines — that two-way ECMP is what makes per-flow load-spreading possible.
 
 ---
 
@@ -21,73 +45,42 @@ By the end of this lab you'll be able to answer, on a whiteboard:
 
 Concepts, not CLI flags:
 
-- **Radix and the pod ceiling.** Why "32-port switches → ~1024 GPUs/pod" isn't a coincidence — it's the arithmetic of CLOS.
-- **Why a 3rd tier exists.** Multi-pod scaling, fault-domain isolation, blast-radius reduction, multi-tenant separation.
-- **The shape of 3-tier BGP.** Adding another eBGP hop, what the AS numbering pattern looks like, why super spines are usually a shared-AS tier (same teaching choice as your spines today — [ADR-002](../../notes/decisions.md)).
-- **Why super spines transit underlay-only by default.** The EVPN routes still flow end-to-end, but the super-spine tier doesn't need to *participate* in EVPN signaling for a pure cross-pod underlay design — it's a routing-only relay.
-- **What it means for collectives.** When does an AllReduce stay in-pod and when does it cross the super spine? Why hyperscalers schedule training jobs to minimize cross-pod traffic.
-- **What failure looks like at this scale.** A spine failure inside a pod converges over the pod's leaves; a super-spine failure spans pods. The blast radius is *deliberately* layered.
+- **SRv6 vs MPLS-SR vs VXLAN** — why encoding segments as IPv6 addresses means the underlay needs *no* new data plane, and how that compares to the VXLAN overlay you built
+- **uSID / micro-segments** — the compressed SID format, and what `block-len 32 node-len 16` actually carves up in a 128-bit address
+- **Locator → endpoint → headend** — the three pieces, which live in FRR (control plane) and which live in the Linux kernel (data plane)
+- **`End.DT6`** — "decapsulate and do an IPv6 table lookup," the endpoint behavior that terminates a uSID path
+- **H.Encaps.Red** — reduced encapsulation: a single uSID in the outer DA, no SRH, minimal overhead
+- **Per-flow ECMP via the IPv6 flow label** — how Linux derives the outer flow label from the inner flow so distinct flows hash to different spines (the SRv6 twin of Lab 4's VXLAN UDP-source-port trick)
+- **The one gotcha that will bite you** — why an SRv6 endpoint **must** bind to a real device and silently does nothing on `lo`
 
-> 💡 **Why this matters in AI DCs.** Every public AI fabric paper (Meta RSC, Microsoft GPU pods, Google's TPU networks, AWS HyperPod) eventually shows the same shape: tier-1 leaves, tier-2 spines, tier-3 super spines (sometimes called *aggregation* or *core*). The first time you see a 3-tier diagram you should be asking "at what scale did they need this?" — that's the question this lab answers.
+> 💡 **Why two CLIs again?** Like Lab 2, you'll use **both** surfaces. The SRv6 **locator** is a control-plane object, so it lives in **`vtysh`** (FRR). The **endpoint** and **headend** are kernel data-plane state, so they're plain **`ip -6 route`** commands in the shell — the same division of labor Lab 2/3 used (`vtysh` for BGP, `config`/`ip` for the VXLAN kernel devices). FRR 10.4 takes the locator config but doesn't program the kernel endpoint itself, so you do that hop directly.
 
 ---
 
 ## Teaching philosophy
 
-Labs 1–3 were *build* labs — you typed config, the fabric came up, ping worked. Lab 4 was an *observe* lab — you watched the dashboard fill. Lab 5 is a *reason* lab — most of your time is reading and thinking, not typing. Where you do open a console, you're inspecting state that already exists to anchor a concept (`show bgp summary` to count the current spine fan-out; `show ip route ... json` to count today's ECMP paths). Each inline **Check ▸** widget passes against the healthy fabric — clicking it is the moment the guide says "you've now observed the thing I just explained."
+Lab 2 built a *service* (an overlay you could sell a tenant). Lab 5 builds an **alternative transport for that service** — and does it without tearing anything down. The whole lab is a lesson in *additive evolution*: real fabrics don't get rebuilt, they get dual-stacked and migrated one capability at a time. You'll feel that directly — VXLAN keeps pinging the entire time you stand SRv6 up next to it.
 
-This is deliberate. Network design at hyperscale is *mostly* whiteboarding — the actual `vtysh` commands are the small last step. A lab that's all typing would mis-teach the topic.
+For each step you'll:
+
+1. **Define the control plane** — the uSID locator in `vtysh` (`show segment-routing srv6 locator` confirms it).
+2. **Program the data plane** — the `End.DT6` endpoint and the H.Encaps headend with `ip -6 route` (verify with `ip -6 route show` and the seg6local packet counter).
+3. **Send a packet** — a ping that rides a uSID from leaf to leaf, decapsulated at the far end.
+4. **Watch it spread** — drive several flows and see them split across both spines on the embedded Grafana dashboard.
+
+Each step has a **💡 Why this matters in AI DCs** callout connecting the mechanic to real fabrics — traffic engineering, multi-tenancy, the end-to-end-vs-fabric encapsulation debate, and why per-flow entropy is non-negotiable for collective performance.
 
 ---
 
 ## Prerequisites
 
-- **Labs 1–4 complete (or at least Lab 4's fabric state).** Lab 5 leaves the fabric exactly where Lab 4 did: workers on `192.168.100.0/24`, EVPN-VXLAN overlay live, all 8 BGP sessions Established. If anything is sick, click **Start ▶** to re-apply `_overlay_workers`.
-- Open the [Lab 4 dashboard](http://localhost:3001/d/aidc-lab4/) in another tab — when we talk about "per-pod ECMP" it'll be useful to flip over and look at real link rates.
-- Keep [`../topology.md`](../topology.md) handy for the existing IP / link / ASN scheme.
+- **Labs 1–4 understood**, and ideally Lab 4 was the last lab you solved (so the workers are on the overlay). When you click **Start lab ▶** for Lab 5, the orchestrator applies `_srv6_skeleton`: your full IPv4 + EVPN-VXLAN fabric **plus** the pre-provisioned IPv6 dual-stack underlay. If anything looks sick, click **Start ▶** again to re-apply it.
+- Keep the **addressing table** above open in another tab. You'll reference the locator and service prefixes constantly.
+- The embedded **Telemetry** tab (the Lab 4 Grafana dashboard) is back — you'll use it in the final step to watch the ECMP spread.
 
 ---
 
-## The current 2-tier addressing scheme (what the math is anchored to)
+## Where to go next
 
-Before we walk into a 3rd tier, anchor on what you already have:
-
-| Tier | Devices | ASN(s) | Loopbacks | Links |
-|---|---|---|---|---|
-| **Spines** | spine1, spine2 | `65000` (shared, per ADR-002) | `10.0.0.1/32`, `10.0.0.2/32` | 4 per spine: eth1..eth4 → leaf1..leaf4 |
-| **Leaves** | leaf1..leaf4 | `65101..65104` (per-leaf) | rid `10.0.1.X/32`, VTEP `10.0.10.X/32` | 2 per leaf: eth1 → spine1, eth2 → spine2 |
-| **Workers** | gpu1..gpu8 | n/a | overlay `192.168.100.11..18/24` | 1 per worker: eth1 → leaf eth3/eth4 |
-| **Spine ↔ leaf** | 8 links | numbered /31 `10.1.{spine}.{leaf*2}/31` | — | full bipartite |
-
-This is **1 pod**. Spine1 burns all 4 fabric-facing ports on leaves; the pod can't grow without bigger spines or another tier. That's the constraint Lab 5 unpacks.
-
----
-
-## The workflow loop
-
-For each section of the exercise:
-
-1. **Read** the conceptual content. The scale math is the load-bearing part.
-2. **Run** the indicated inspection command on the indicated console (spine1 or leaf1). Confirm what the guide claimed.
-3. Click **Check ▸** to record the observation.
-
-At the end, **Submit ✓** runs all the inspection checks plus the 56-pair worker ping mesh — a regression guard that the conceptual walk didn't perturb anything.
-
----
-
-## Persistence note
-
-This lab doesn't change fabric state. There's nothing to persist or roll back. **Start ▶** and **Solve ✓** both re-apply the same `_overlay_workers` baseline; **Reset ↺** is identical. You can click any of them at any time without losing anything.
-
----
-
-## Where to go
-
-- **[`lab5-exercise.md`](lab5-exercise.md)** — the guided walkthrough. Start here.
-- **[`lab5-solution.md`](lab5-solution.md)** — radix-math worksheet answers + reference FRR config blocks a real super-spine tier would use (for when you want to see the actual BGP shape, not just discuss it).
-
-Reference material to keep open in another tab:
-
-- **[`../topology.md`](../topology.md)** — current 2-tier IP / link / ASN scheme.
-- **[`../../notes/decisions.md`](../../notes/decisions.md)** — ADR-002 (shared-AS spines, why the same choice would apply at the super-spine tier), ADR-013 (why this lab is conceptual, not deployed).
-- **[Lab 4 Grafana](http://localhost:3001/d/aidc-lab4/)** — useful for "per-pod ECMP" discussion.
+- **[`lab5-exercise.md`](lab5-exercise.md)** — the guided, command-by-command walkthrough. Start here.
+- **[`lab5-solution.md`](lab5-solution.md)** — the copy-pasteable answer key, a vtysh/`ip` ↔ config mapping, and a common-mistakes table (including *the* `dev lo` trap).

@@ -226,7 +226,7 @@ make shell-orchestrator  # interactive shell inside the FastAPI container
 
 Both backend (`orchestrator/api/main.py`, [Dockerfile](orchestrator/Dockerfile)) and frontend (`ui/`, Next.js + xterm.js + react-markdown, [Dockerfile](ui/Dockerfile)) run as containers managed by containerlab. The backend mounts `/var/run/docker.sock` from the host so it can `docker exec -it` into the other lab containers; it streams stdio over a WebSocket to the browser. The frontend pages:
 
-- **/** — **Labs index.** Cards for each lab (Labs 1–5 active; Lab 6 is a placeholder for future content).
+- **/** — **Labs index.** Cards for each lab (Labs 1–6 active; Lab 7 is a placeholder for future content).
 - **/labs/&lt;id&gt;** — **Lab workbench.** Free-scroll markdown guide on the left + tabbed terminal pane on the right + a "Topology" button that pops a clickable fabric diagram for picking which device to console into. Multiple terminals stay open across tab switches.
 - **/topology** — Standalone topology view (hover a device to see its links' IPs; click for a single console).
 - **/console/&lt;name&gt;** — Standalone single-device terminal.
@@ -302,7 +302,9 @@ After Lab 2, **Lab 3 · GPUs on the Overlay + first AllReduce** brings the eight
 
 Then **Lab 4 · Telemetry & Visualization with gNMI + Grafana** layers a streaming-telemetry pipeline (gnmic → Prometheus → Grafana) over your working fabric and embeds the dashboard directly in the workbench. You re-run the Lab 3 AllReduces and *watch the per-link Mbps fill in real time* — including ECMP load-spread across both spines. The first lab where you spend more time reading the chart than typing commands.
 
-**Lab 5 · Super Spines — Beyond a Single-Pod CLOS** is a conceptual follow-on: walk the radix math that bounds a single pod (~1024 GPUs on 32-port silicon), see what shape a 3rd tier of BGP would take above your existing spines, and understand why hyperscalers schedule training jobs to live inside a pod when they can. Nothing new gets deployed — you inspect the fabric you already have to anchor each point. See [ADR-013](notes/decisions.md) for why this one's conceptual rather than a deploy lab.
+**Lab 5 · SRv6 uSID Transport + ECMP** lays a Segment Routing over IPv6 (SRv6) transport across the fabric — *additive* alongside the IPv4 underlay and EVPN-VXLAN overlay you already built. You dual-stack the fabric, define micro-SID (uSID) locators in FRR, program kernel `End.DT6` endpoints so each leaf decapsulates, steer flows into uSID with an H.Encaps headend, then watch distinct flows spread per-flow across both spines on the IPv6 flow label — the SRv6 analog of the VXLAN ECMP you saw in Lab 4 (same embedded Grafana dashboard, new encapsulation).
+
+**Lab 6 · Super Spines — Beyond a Single-Pod CLOS** is a conceptual follow-on: walk the radix math that bounds a single pod (~1024 GPUs on 32-port silicon), see what shape a 3rd tier of BGP would take above your existing spines, and understand why hyperscalers schedule training jobs to live inside a pod when they can. Nothing new gets deployed — you inspect the fabric you already have to anchor each point. See [ADR-013](notes/decisions.md) for why this one's conceptual rather than a deploy lab.
 
 Sessions persist server-side (SQLite, mounted at `./.aidc-orchestrator-data`), so you can close the browser, come back tomorrow, and pick up where you left off.
 
@@ -324,7 +326,7 @@ make fabric-bootstrap  # re-run the FRR bootstrap script on every switch
 - **Phase 1** — bare fabric, BGP underlay, ECMP ✓
 - **Phase 2** — FastAPI + Next.js UI with web console + topology view ✓
 - **Phase 3** — EVPN-VXLAN overlay (Lab 2 ✓), GPUs on the overlay + first AllReduce (Lab 3 ✓), Ansible config push
-- **Phase 4** — gNMI streaming telemetry with embedded Grafana dashboards (Lab 4 ✓), super spines / multi-pod scale (Lab 5 ✓ conceptual), failure injection during AllReduce (Lab 6), incast + ECN demos ← **you are here**
+- **Phase 4** — gNMI streaming telemetry with embedded Grafana dashboards (Lab 4 ✓), SRv6 uSID transport + per-flow ECMP (Lab 5 ✓), super spines / multi-pod scale (Lab 6 ✓ conceptual), failure injection during AllReduce (Lab 7), incast + ECN demos ← **you are here**
 - **Phase 5** — polished demo scenarios + 9 blog posts
 
 The UI was promoted to Phase 2 so every subsequent feature (overlay, collectives, telemetry) can be demoed visually rather than only through `make shell-*`. See [ADR-009](notes/decisions.md).

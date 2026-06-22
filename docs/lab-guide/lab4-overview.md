@@ -74,4 +74,4 @@ Each step has a 💡 **Why this matters in AI DCs** callout connecting it to pro
 
 ## Where this fits in the phase roadmap
 
-This lab is the foundation for **Lab 5 — Inject Failure During AllReduce** (coming soon). You can't usefully run failure injection without dashboards: the lesson is "watch BGP reconverge in 3 s while AllReduce keeps going," and that lesson only lands if you can *see* the reconvergence happen. Lab 4 is what makes Lab 5 possible.
+This lab is the foundation for **Lab 7 — Inject Failure During AllReduce** (coming soon). You can't usefully run failure injection without dashboards: the lesson is "watch BGP reconverge in 3 s while AllReduce keeps going," and that lesson only lands if you can *see* the reconvergence happen. Lab 4 is what makes that possible.

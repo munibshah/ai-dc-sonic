@@ -1,229 +1,267 @@
-# Exercise — Super spines: when one pod isn't enough
+# Exercise — Build an SRv6 uSID transport, one piece at a time
 
-> Read [`lab5-overview.md`](lab5-overview.md) first if you haven't.
+> Read [`lab5-overview.md`](lab5-overview.md) first if you haven't — it has the addressing table you'll reference throughout.
 
 ## Scenario
 
-You're operating a healthy AI training pod: 2 spines, 4 leaves, 8 GPUs. AllReduce runs cleanly, the Grafana dashboard fills, your boss is happy. Then product comes back: "we need to add another 1000 GPUs by Q3."
+Your fabric is humming: IPv4 underlay, EVPN-VXLAN overlay, eight GPUs on `192.168.100.0/24`, telemetry live. Nothing here is going away. The architecture team wants to evaluate **SRv6** as a future transport — encode forwarding instructions as IPv6 addresses, carry traffic in micro-SIDs, and get per-flow ECMP "for free" from the IPv6 flow label — **without** ripping out VXLAN to try it.
 
-Can your current pod absorb that? Almost certainly not — and the reason is **switch radix**. This lab walks the math, then walks what you'd build instead. You won't deploy anything new; the existing fabric stays exactly where Lab 4 left it. You'll inspect it to anchor each conceptual point.
+So you'll **dual-stack and migrate additively**. When you clicked **Start ▶**, the orchestrator pre-provisioned the IPv6 underlay for you: a `/127` on every spine↔leaf link, an IPv6 BGP session per link, and each leaf's uSID locator `/48` advertised with ECMP via both spines. The seg6 kernel switches (`seg6_enabled`, IPv6 forwarding, IPv6 multipath hashing, flow-label derivation) are already on. **Your job is the SRv6 layer itself**: locators, endpoints, headend — built on the four leaves while VXLAN keeps pinging the whole time.
 
-### Get to the starting line
+You'll build **leaf1 and leaf3 fully first** (they're the two ends of the demo path), then replicate onto **leaf2 and leaf4**, then send a uSID packet across the fabric and watch it load-spread.
 
-Click **Start lab ▶** in the top bar. The orchestrator re-applies the `_overlay_workers` baseline (same as Lab 4's solved state) — workers on `192.168.100.0/24`, EVPN-VXLAN live, all BGP sessions Established. Within ~30 seconds the lab status pill flips to `In progress`.
+### Why an AI Data Center cares about SRv6
 
-Open consoles for **spine1** and **leaf1** via the **Topology** button — you'll alternate between them.
+VXLAN is a great overlay, but it's an *overlay* — opaque to the fabric, a fixed UDP tunnel between two VTEPs. SRv6 puts the steering **in the packet's IPv6 header**, which buys an AI DC three things:
+
+- **Traffic engineering** — you can pin a flow down a specific path (a low-latency rail, a drained spine) by listing segments, without per-flow state in the fabric.
+- **One protocol, end to end** — the same SRv6 can run on the GPU server's NIC, the leaf, and the WAN, so a tenant's traffic keeps its policy across domains.
+- **Native per-flow ECMP** — because the steering rides in IPv6 and Linux derives the outer flow label from the inner flow, collective traffic spreads across every spine path automatically. That last property is the one we'll prove.
+
+This is the direction hyperscale fabrics are moving — uSID specifically, because its header overhead is tiny enough to live alongside RDMA.
 
 ---
 
-## Step 1: The radix wall
+## Step 1: Look at the dual-stack underlay you were handed
 
-A CLOS fabric's size is bounded by the **radix** of its switches — how many ports each one has. The pod ceiling falls out of one equation:
+Open the **Topology** tab and click `leaf1` (or hit **+** in the terminal pane and pick `leaf1`). A console opens.
 
-> **Max workers per pod = (leaf-facing ports per spine) × (worker-facing ports per leaf)**
-
-Walk it for your current fabric. On the **leaf1** console:
+### Confirm IPv4 + VXLAN are still completely fine
 
 ```sh
-docker exec leaf1 ip -br link show | grep -E '^eth[1-4]' | head -10
+vtysh -c "show ip bgp summary" | head -12
+ping -c1 -I Vlan1000 192.168.100.3
 ```
 
-You'll see four fabric/worker-facing veths:
+The IPv4 underlay is up and a VXLAN overlay ping to leaf3 still works — **you haven't touched any of it.** Everything you do in this lab is additive.
 
-- `eth1` → spine1 (fabric-side)
-- `eth2` → spine2 (fabric-side)
-- `eth3` → gpu1 (worker-side)
-- `eth4` → gpu2 (worker-side)
-
-So each leaf has **2 worker ports**. Now on **spine1**:
+### Now look at the new IPv6 layer underneath
 
 ```sh
-docker exec spine1 ip -br link show | grep -E '^eth[1-4]' | head -10
+ip -6 addr show dev eth1 | grep inet6
+vtysh -c "show bgp ipv6 unicast summary" | head -12
+vtysh -c "show ipv6 route fcbb:bb00:3::/48"
 ```
 
-Same shape: `eth1..eth4` → leaf1, leaf2, leaf3, leaf4. **4 leaf-facing ports per spine.**
+Expected: `eth1` carries `fc00:1:1::1/127` (the link to spine1), the IPv6 BGP sessions to both spines are **Established**, and leaf3's locator `fcbb:bb00:3::/48` is in the RIB **via two nexthops** — one through each spine:
 
-Plug into the equation:
+```
+leaf1's view of leaf3's locator:
+  fcbb:bb00:3::/48
+     via fc00:1:1::0  (spine1)   <-- ECMP path 1
+     via fc00:2:1::0  (spine2)   <-- ECMP path 2
+```
 
-> max workers per pod = 4 (leaf-facing on spine) × 2 (worker-facing on leaf) = **8 workers**
+That two-way ECMP is the whole reason uSID traffic will load-spread. It's pre-built; you just confirmed it.
 
-That's the size of this pod. You're already at the ceiling.
+<checkpoint name="dualstack_underlay_healthy" label="Dual-stack underlay healthy — IPv4+IPv6 BGP, locators reachable via ECMP" />
 
-> 💡 **Why this matters in AI DCs.** Real production switches are 32-port to 128-port (with some 256-port silicon in newer designs). The same equation scales: 32-port spines × 32-port leaves = **1024 workers per pod**. Above that — and any meaningful AI training cluster is above that — you can't add another rack of GPUs without either replacing every switch (expensive, ops-painful) or adding a **third tier**. This is the moment the super spine enters the diagram.
-
-Sanity-check that you started from a healthy 2-tier fabric:
-
-<checkpoint name="fabric_healthy_two_tier" label="2-tier fabric healthy — starting line" />
+> 💡 **Why this matters in AI DCs**: dual-stacking is how real fabrics adopt SRv6 — you light up IPv6 + a locator block alongside the production IPv4/VXLAN and migrate services one at a time. The fabric never goes down for the transport swap; the two coexist for as long as the migration takes (often years). You're seeing the first hour of that migration.
 
 ---
 
-## Step 2: Read the current spine fan-out
+## Step 2: Define the uSID locator (the control plane)
 
-Your spine is the radix-bounded thing. Watch what it currently sees. On the **spine1** console:
+A **locator** is a leaf's block of SRv6 address space — its `/48` — plus the rule for carving SIDs out of it. It's a control-plane object, so it lives in FRR. Drop into `vtysh` on `leaf1`:
 
 ```sh
-vtysh -c "show bgp ipv4 unicast summary"
+vtysh
+conf t
+segment-routing
+ srv6
+  locators
+   locator MAIN
+    prefix fcbb:bb00:1::/48 block-len 32 node-len 16
+    behavior usid
+end
 ```
 
-Look at the **Neighbor / V / AS / State** columns. Expected:
-
 ```
-Neighbor    V    AS      ... State/PfxRcd
-10.1.1.1    4    65101   ... <int>   (leaf1)
-10.1.1.3    4    65102   ... <int>   (leaf2)
-10.1.1.5    4    65103   ... <int>   (leaf3)
-10.1.1.7    4    65104   ... <int>   (leaf4)
+leaf1  locator MAIN
+  fcbb:bb00:1::/48
+  |__ block 32 bits __|__ node 16 __|__ function 16 __|
+     fcbb:bb00          0001            (per-SID)
+     "which fabric"     "which leaf"    "which behavior"
+  behavior: uSID   <-- compressed micro-segments
 ```
 
-Four leaf sessions, all Established (PfxRcd is an int, not "Active" or "Idle"). spine1 has **no more fabric-facing capacity** in this image — you'd need to either (a) renumber onto a switch with more ports or (b) add another spine alongside it.
-
-> 💡 **Why `ipv4 unicast` and not just `show bgp summary`?** Without an address-family qualifier, FRR prints *every* AF — IPv4 unicast AND L2VPN-EVPN. On this fabric every neighbor exists in both AFs, so the bare `show bgp summary` lists each neighbor twice. Scoping to `ipv4 unicast` is what makes "4 rows = 4 leaves" line up.
-
-(a) is the "scale up" path — bigger silicon, more expensive per port, eventually hits its own ceiling. (b) is the "scale out" path — but to wire a 5th leaf into the pod, you'd need a 5th port on *every existing* spine too, and you're back to (a).
-
-The way out is to **add a tier above the spines**. The spines stop being the top — they become the middle. Above them, a new layer of "super spines" connects multiple pods. Each pod retains its own 2-tier internal CLOS; super spines stitch pods into one fabric.
-
-> 💡 **Why this matters in AI DCs.** Real GPU training jobs map onto pods. A small job (a few hundred GPUs) fits in one pod — its collectives ride the existing 2-tier CLOS, no cross-pod traffic. A large job (thousands of GPUs) spans pods — collectives cross the super-spine layer. The scheduler that places jobs is *acutely aware* of this distinction; the super spine is the fabric primitive that makes "multi-pod jobs" possible without making them invisible.
-
-<checkpoint name="spine_fanout_observed" label="Spine1 fans out to 4 leaves — pod's leaf-radix ceiling today" />
-
----
-
-## Step 3: ECMP today, and what a 3rd tier extends it to
-
-Inside your current pod, leaf-to-leaf traffic ECMPs across both spines. Confirm it. On the **leaf1** console:
+Confirm it landed, then leave vtysh:
 
 ```sh
-vtysh -c "show ip route 10.0.10.3"
+end
+do show segment-routing srv6 locator
+exit
 ```
 
-You'll see leaf3's VTEP loopback reachable via **two** nexthops:
+You should see `MAIN ... fcbb:bb00:1::/48 ... Up`, behavior **uSID**.
 
-```
-B>* 10.0.10.3/32 [20/0] via 10.1.1.0, eth1, weight 1, ...
-  *                    via 10.1.2.0, eth2, weight 1, ...
-```
+**Now repeat on `leaf2`, `leaf3`, `leaf4`** — open a console on each and run the same block with **its own** locator prefix:
 
-Two ECMP paths — one through spine1, one through spine2. Per-flow load-balancing across both. This is the per-pod ECMP that Lab 4's Grafana dashboard makes visible when you ran the 8-rank AllReduce: traffic from each leaf splits across `eth1` (spine1) and `eth2` (spine2).
+| Leaf | `prefix` line |
+|---|---|
+| leaf2 | `prefix fcbb:bb00:2::/48 block-len 32 node-len 16` |
+| leaf3 | `prefix fcbb:bb00:3::/48 block-len 32 node-len 16` |
+| leaf4 | `prefix fcbb:bb00:4::/48 block-len 32 node-len 16` |
 
-Now picture the 3-tier extension. In a multi-pod build:
+When all four leaves report their locator `Up`, run the check.
 
-```
-                  +----- supersp1 -----+----- supersp2 -----+
-                  |        |           |        |           |
-              +---+--------+--+    +---+--------+--+        ...  more pods
-              |  pod-1 spines |    |  pod-2 spines |
-              +---------------+    +---------------+
-              |  pod-1 leaves |    |  pod-2 leaves |
-              +---------------+    +---------------+
-              | pod-1 workers |    | pod-2 workers |
-              +---------------+    +---------------+
-```
+<checkpoint name="srv6_locators_configured" label="uSID locators defined on all 4 leaves" />
 
-Traffic from a pod-1 worker to a pod-2 worker:
-- worker → leaf (in pod-1)
-- leaf → spine (pod-1) — **2 ECMP paths within the pod** (this is what you just saw)
-- spine → super spine — **N ECMP paths to N super spines**
-- super spine → spine (pod-2)
-- spine → leaf → worker (in pod-2)
-
-The ECMP picture you have today (2 paths per source) is a **per-pod** view. The 3rd tier adds another ECMP axis on top — per-pod-pair ECMP across the super-spine layer. Same load-balancing principle, one tier up.
-
-> 💡 **Why this matters in AI DCs.** AllReduce ring algorithms produce N² TCP flows (every rank talks to every other rank). With per-flow ECMP at both tiers, those flows spread across every available physical path — that's how a single AllReduce step can saturate dozens of links simultaneously. Without per-flow ECMP (or with broken hashing — see CLAUDE.md pitfall #18), the collective serializes onto a single path and bandwidth craters. Real AI DCs treat ECMP hashing as a tier-0 correctness concern, not a perf nice-to-have.
-
-<checkpoint name="per_pod_ecmp_observed" label="leaf1 → leaf3 VTEP via 2 spine-ECMP paths" />
+> 💡 **Why this matters in AI DCs**: the locator is a leaf's *identity* in SRv6 — one summarizable `/48` that the whole fabric routes toward, no matter how many individual SIDs (endpoints, VPNs, policies) the leaf later carves from it. That summarization is why SRv6 scales to fabrics with hundreds of thousands of endpoints without exploding the routing table — the spines only ever carry one `/48` per leaf, exactly what you saw in Step 1.
 
 ---
 
-## Step 4: What the FRR config for a super spine would look like
+## Step 3: Program the endpoint — make the leaf decapsulate (`End.DT6`)
 
-If you were going to deploy `supersp1` and `supersp2` containers above the current spines, this is the BGP config they'd run. (You're not going to — this is reading, not typing. But it's worth seeing the actual shape; it's a clean extension of patterns you already used in Labs 1 and 2.)
+The locator told the *control plane* "this `/48` is mine." Now you program the *data plane*: an **endpoint SID** the leaf will match, decapsulate, and deliver from. The endpoint behavior is a kernel `seg6local` route. Back in the `leaf1` **shell** (type `exit` if you're still in vtysh):
 
-**`supersp1` (proposed AS 64999):**
-
-```
-frr defaults datacenter
-hostname supersp1
-log syslog informational
-service integrated-vtysh-config
-!
-interface lo
- ip address 10.0.0.101/32
-!
-interface eth1
- description to_spine1
- ip address 10.3.1.0/31
-!
-interface eth2
- description to_spine2
- ip address 10.3.1.2/31
-!
-router bgp 64999
- bgp router-id 10.0.0.101
- bgp bestpath as-path multipath-relax
- no bgp default ipv4-unicast
- neighbor SPINES peer-group
- neighbor SPINES advertisement-interval 0
- neighbor SPINES timers 3 9
- neighbor 10.3.1.1 remote-as 65000
- neighbor 10.3.1.1 peer-group SPINES
- neighbor 10.3.1.1 description spine1
- neighbor 10.3.1.3 remote-as 65000
- neighbor 10.3.1.3 peer-group SPINES
- neighbor 10.3.1.3 description spine2
- !
- address-family ipv4 unicast
-  network 10.0.0.101/32
-  maximum-paths 64
-  neighbor SPINES activate
-  neighbor SPINES soft-reconfiguration inbound
- exit-address-family
-!
-line vty
-!
+```sh
+ip link add srv6end type dummy
+ip link set srv6end up
+sysctl -w net.ipv6.conf.srv6end.seg6_enabled=1
+ip -6 route replace fcbb:bb00:1:fe00:: encap seg6local action End.DT6 table 255 dev srv6end
 ```
 
-Spine1 would gain a matching block — two more interface stanzas (eth5, eth6) and a `SUPERSPINES` peer-group with the two super-spine neighbors.
+```
+leaf1  endpoint
+   fcbb:bb00:1:fe00::   --(arrives wrapped)-->  End.DT6
+                                                  |__ strip outer IPv6/uSID
+                                                  |__ look inner up in table 255 (local) = deliver here
+                                                  |__ deliver to fd00:100:1::x  (local)
+   bound to:  srv6end  (a dummy device -- NOT lo!)
+```
 
-Notable design choices in that block:
+Verify it attached — the packet counter is your ground truth:
 
-- **AS 64999 is shared** between supersp1 and supersp2 — same teaching choice as your two spines today ([ADR-002](../../notes/decisions.md)). Loops are still prevented by standard own-AS rejection.
-- **No `address-family l2vpn evpn`** on the super spines. The super spine is a *routing-only* relay between pods. EVPN routes can still ride through it (the underlay carries them as IPv4 unicast next-hops), but the super spine doesn't participate in EVPN signaling. Production designs differ — some put route reflectors at this tier — but for our "scale out the underlay" thesis, EVPN-off is the simpler, more honest shape.
-- **`10.3.0.0/16` /31 block** for supersp↔spine links. The lab's `10.2.x.x` block is taken by worker /31s ([`workers/entrypoint.sh`](../../workers/entrypoint.sh) and [`orchestrator/api/labruns.py`](../../orchestrator/api/labruns.py)); `10.3` is the next clean choice.
+```sh
+ip -6 -s route show fcbb:bb00:1:fe00::
+```
 
-The full set of config blocks (spine1, spine2, supersp1, supersp2) lives in [`lab5-solution.md`](lab5-solution.md) Appendix A as reference material.
+You should see `encap seg6local action End.DT6 ... dev srv6end` (and `packets 0` for now — it'll climb in Step 5).
 
-> 💡 **Why this matters in AI DCs.** A real super-spine deployment is not architecturally interesting — the BGP shape is just "another tier of the same pattern you already understand." What's interesting is the **operational** story: bringing a new tier up without disrupting in-pod traffic, planning the failure modes (a super-spine outage is multi-pod; an in-pod-spine outage is single-pod), and scheduling jobs to land on pods rather than spanning them. Most of those concerns aren't in the BGP config — they're in the orchestrator above it.
+> ⚠️ **The trap that will cost you an hour if you hit it**: an `End.DT6` route on **`dev lo`** is *silently accepted and does nothing* — `ip route show` prints a plain route with no `encap`, and any uSID packet that arrives gets an ICMP "destination unreachable." seg6local endpoints **must** bind to a real device. That's why we created the `srv6end` dummy. If your endpoint check fails, this is the first thing to look at.
+
+**Repeat on `leaf2`, `leaf3`, `leaf4`** — same four commands, each with **its own** endpoint SID (`fcbb:bb00:2:fe00::`, `fcbb:bb00:3:fe00::`, `fcbb:bb00:4:fe00::`).
+
+<checkpoint name="endpoint_sids_installed" label="End.DT6 endpoints decapsulating on every leaf" />
+
+> 💡 **Why this matters in AI DCs**: `End.DT6` is "decapsulate and look the inner packet up in a table" — and that *table* is the hook for multi-tenancy. Point different endpoint SIDs at different VRF tables and one fabric carries many isolated tenants' GPU pods over a shared SRv6 core, each only reaching its own hosts. It's the SRv6 equivalent of an EVPN L3VNI, done with one kernel route.
 
 ---
 
-## Step 5: Submit ✓
+## Step 4: Program the headend — steer flows into a uSID (`H.Encaps.Red`)
 
-Click **Submit ✓** in the top bar. The orchestrator runs:
+The endpoint lets a leaf *receive* uSID traffic. The **headend** lets it *send*: a route that says "for traffic to that remote service prefix, wrap it in the remote leaf's uSID." On `leaf1`, install a headend for each other leaf's service prefix:
 
-1. The three inspection checks you've already clicked through, all over again (they should still pass — the fabric hasn't changed).
-2. The full **56-pair worker ping mesh** across the overlay (8 sources × 7 destinations). This is the regression guard: a conceptual lab shouldn't perturb fabric state. If the mesh still pings 56/56, you've completed Lab 5 with zero collateral damage.
+```sh
+ip -6 route replace fd00:100:2::/64 encap seg6 mode encap.red segs fcbb:bb00:2:fe00:: dev eth1
+ip -6 route replace fd00:100:3::/64 encap seg6 mode encap.red segs fcbb:bb00:3:fe00:: dev eth1
+ip -6 route replace fd00:100:4::/64 encap seg6 mode encap.red segs fcbb:bb00:4:fe00:: dev eth1
+```
 
-If everything passes, the lab stamps as **Passed**, the completion screen appears, and the CTA for Lab 6 ("Inject Failure During AllReduce") lights up — though Lab 6 itself is `coming-soon` for now.
+```
+a flow leaf1 -> fd00:100:3::5  gets wrapped (H.Encaps.Red, no SRH):
+
+ inner:  [ IPv6 | fd00:100:1::1 -> fd00:100:3::5 ]            the real packet
+                         |
+                         v   leaf1 headend
+ outer:  [ IPv6 | leaf1 -> fcbb:bb00:3:fe00:: | flowlabel=hash(inner) ][ inner ]
+                          ^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^
+                          leaf3's uSID in the    derived from the inner flow
+                          outer DA (no SRH!)     => different per flow => ECMP
+```
+
+`mode encap.red` is **reduced** encap: a single uSID rides in the outer destination address with no separate routing header — minimum overhead.
+
+**Now do the same on `leaf2`, `leaf3`, `leaf4`**, each steering the *other three* service prefixes into the matching uSID. (leaf3 needs a headend for `fd00:100:1::/64` so its replies to leaf1 ride SRv6 back — the path is symmetric.) The check inspects leaf1:
+
+<checkpoint name="headend_steering_installed" label="Leaf1 steers remote service prefixes into uSID (headend)" />
+
+> 💡 **Why this matters in AI DCs**: the headend is where **traffic engineering** lives. Today you steer with a single uSID = shortest path. List *more* segments and you pin a flow down a specific route — around a hot spine, onto a dedicated low-jitter rail for a latency-sensitive all-to-all, or through a firewall for a cross-tenant flow — all by editing one headend route, with zero new state in the fabric core. That's the SRv6 superpower VXLAN can't match.
 
 ---
 
-## Stuck?
+## Step 5: Send a packet across the uSID transport
+
+Everything's in place: leaf1 can wrap, the spines forward IPv6, leaf3 decapsulates. Send a flow from a host behind leaf1 to a host behind leaf3:
+
+```sh
+ping6 -c3 -I fd00:100:1::1 fd00:100:3::1
+```
+
+```
+  leaf1 (headend)                         leaf3 (End.DT6)
+  fd00:100:1::1  --wrap--> fcbb:bb00:3:fe00:: --decap--> fd00:100:3::1
+                      \                       /
+                       spine1  -- or --  spine2     (ECMP picks one per flow)
+```
+
+It should reply. To *prove* leaf3 actually decapsulated (rather than some other path), check its endpoint counter — it climbed:
+
+```sh
+# on leaf3:
+ip -6 -s route show fcbb:bb00:3:fe00::
+```
+
+`packets` is now non-zero: that's leaf3 popping your uSID and delivering the inner packet locally.
+
+<checkpoint name="srv6_path_works" label="Leaf1 → Leaf3 over the SRv6 uSID transport" />
+
+> 💡 **Why this matters in AI DCs**: you just moved real traffic over a transport the fabric core has *no per-flow state* for — the spines are plain IPv6 routers. That statelessness is why SRv6 scales: adding a tenant, a policy, or a path is an edit at the *edge* (the leaf headend), never a touch to the thousands of switches in the middle. Collective traffic for a new training job lands on the fabric without anyone reconfiguring a spine.
+
+---
+
+## Step 6: Watch it spread across both spines, then Submit
+
+A single ping is one flow — it picks one spine and stays there. The payoff is **many** flows spreading. Generate a burst of distinct flows from leaf1 to leaf3 (each destination address is a different flow → a different flow label → a different ECMP decision):
+
+```sh
+# on leaf1 — 16 parallel flows to distinct hosts behind leaf3:
+for i in $(seq 1 16); do
+  ping6 -q -i 0.2 -c 200 -I fd00:100:1::1 fd00:100:3::$i &
+done
+```
+
+Open the **Telemetry** tab (the Grafana dashboard from Lab 4). Watch the **spine1 and spine2** ingress/egress toward leaf3 — **both light up**, splitting the flows between them (a hash spreads 16 flows, so expect a rough — not perfectly even — split; the more flows, the closer to 50/50):
+
+```
+            uSID traffic leaf1 -> leaf3, 16 flows
+                       /              \
+                 spine1                spine2
+           some flows            the rest        <- per-flow ECMP on the flow label
+                       \              /
+                       leaf3 (End.DT6)
+```
+
+That's the same load-spreading you saw for VXLAN in Lab 4 — but the entropy is now the **IPv6 flow label** the kernel derived from each inner flow, not a VXLAN UDP source port. Two transports, same essential property, because both put per-flow entropy where the fabric's ECMP hash can see it.
+
+Let the pings finish (or `kill %1 %2 ...`), then click **Submit ✓**. The finale verifies three things at once:
+
+1. uSID traffic can spread — leaf1 still reaches leaf3's locator via **2** ECMP nexthops.
+2. The SRv6 path works end-to-end (leaf1 → leaf3 over uSID).
+3. **Regression** — the full 56-pair worker overlay mesh still pings. Your additive SRv6 work didn't disturb VXLAN one bit.
+
+<checkpoint name="submit_finale" label="uSID ECMP across both spines + VXLAN mesh intact" />
+
+> 💡 **Why this matters in AI DCs**: per-flow ECMP is not a nicety — a collective is N² flows between GPUs, and if they all pin to one spine you've halved your bisection bandwidth and your AllReduce stalls. Whether the transport is VXLAN or SRv6, the rule is the same: get per-flow entropy into a field the fabric hashes on. You've now built that property twice, two different ways — which is exactly the operator intuition this lab exists to give you.
+
+---
+
+## You're done
+
+You stood up a complete SRv6 uSID transport — locators, endpoints, headend — **additively, alongside a live VXLAN fabric that never skipped a beat**, and proved it load-spreads per-flow across both spines. If everything passed, the lab stamps **Passed** and the CTA for **Lab 6 — Super Spines** lights up.
+
+## Stuck? Want to restart?
 
 | You want to… | Click |
 |---|---|
-| See the worksheet answers + reference FRR configs | **Reveal solution** in the top bar (or open [`lab5-solution.md`](lab5-solution.md)) |
-| Re-apply the baseline (no-op on a conceptual lab; identical to Reset) | **Solve** in the top bar |
-| Wipe back to the healthy `_overlay_workers` baseline | **Reset** in the top bar |
-| Re-run every inspection check + the ping mesh | **Submit ✓** in the top bar |
+| Wipe your SRv6 work + restore the clean dual-stack starting point | **Reset** in the top bar |
+| Run all checks now | **Submit ✓** in the top bar |
 
-> Because this lab doesn't change fabric state, all four buttons are mostly equivalent here. **Start**, **Reset**, and **Solve** all re-apply `_overlay_workers`. **Submit** runs the checks but changes nothing.
+**Reset** re-applies `_srv6_skeleton` — it tears down any `srv6end` device and seg6 routes you added and puts you back at the pre-provisioned dual-stack underlay (IPv4 + VXLAN + IPv6, no SRv6 layer). Your IPv4/VXLAN fabric is never touched by Reset.
 
----
+### Where to go from here
 
-## Where to go next
-
-- [`lab5-solution.md`](lab5-solution.md) — radix-math worksheet answers + reference FRR config blocks (the full would-be `_super_spine/` state)
-- [`../topology.md`](../topology.md) — current 2-tier IP / link / ASN reference
-- [`../../notes/decisions.md`](../../notes/decisions.md) — **ADR-002** (why the super-spine tier would also be shared-AS), **ADR-013** (why Lab 5 teaches super spines conceptually rather than deploying them)
-- **Lab 6 — Inject Failure During AllReduce** — `coming-soon`. Failure injection at the spine tier is the natural follow-on to "what does each tier of the CLOS protect against?"
+- [`lab5-solution.md`](lab5-solution.md) — the full copy-pasteable config for all four leaves, a vtysh/`ip` ↔ behavior mapping, and a common-mistakes table
+- [`../../notes/decisions.md`](../../notes/decisions.md) — **ADR-014** (why this lab is additive dual-stack with leaves as endpoints, and the `dev lo` spike finding)
+- **Lab 6 — Super Spines — Beyond a Single-Pod CLOS** — the conceptual follow-on on multi-pod scale

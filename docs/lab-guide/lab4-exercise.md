@@ -197,7 +197,7 @@ Leave policy=1 on all four leaves before moving on.
 
 ## Wrap-up
 
-You now have a working streaming-telemetry pipeline over a live AI fabric, and you've seen what AllReduce traffic actually looks like on the wire. The dashboard you're looking at is the foundation for everything that comes next — **Lab 5 (failure injection)** will use this same dashboard to show BGP/EVPN reconvergence in real time while AllReduce keeps running.
+You now have a working streaming-telemetry pipeline over a live AI fabric, and you've seen what AllReduce traffic actually looks like on the wire. The dashboard you're looking at is the foundation for everything that comes next — **Lab 7 (failure injection)** will use this same dashboard to show BGP/EVPN reconvergence in real time while AllReduce keeps running.
 
 Click **Submit ✓** to run all six checks in sequence. The 2-rank and 8-rank traffic checks each take ~30-45 s because they have to actually run a collective.
 
