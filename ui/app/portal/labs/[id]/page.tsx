@@ -191,17 +191,23 @@ export default function LabWorkbenchPage() {
 
     streamCloseRef.current = submitLabStream(labId, {
       onMeta: (m) => {
-        setPendingSubmit({
-          passed: false,
-          duration_ms: 0,
-          results: m.checkpoints.map<CheckResult>((c) => ({
-            name: c.name,
-            label: c.label,
+        setPendingSubmit((prev) => {
+          // A dropped SSE connection makes EventSource reconnect, which
+          // re-delivers `meta`. Don't flash the skeleton back over rows we've
+          // already filled — keep showing partial results.
+          if (prev && prev.results.some((r) => !r._pending)) return prev;
+          return {
             passed: false,
-            summary: "",
-            detail: null,
-            _pending: true,
-          })),
+            duration_ms: 0,
+            results: m.checkpoints.map<CheckResult>((c) => ({
+              name: c.name,
+              label: c.label,
+              passed: false,
+              summary: "",
+              detail: null,
+              _pending: true,
+            })),
+          };
         });
       },
       onResult: (r) => {

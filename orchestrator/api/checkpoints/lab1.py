@@ -8,6 +8,8 @@ the lab Passed.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from ..dockerlib import docker_exec, vtysh, count_established
 
 
@@ -139,26 +141,33 @@ def _check_all_leaves_established():
 
 
 def _check_ping_mesh():
-    """Pairwise ping across all 8 workers — expect 56/56 OK."""
-    ok = 0
-    fail = 0
-    fails: list[str] = []
-    for src in WORKERS:
-        for dst in WORKERS:
-            if src == dst:
-                continue
-            dst_ip = WORKER_FABRIC_IP[dst]
-            rc, _ = docker_exec(src, ["ping", "-c", "1", "-W", "2", "-q", dst_ip], timeout=5)
-            if rc == 0:
-                ok += 1
-            else:
-                fail += 1
-                if len(fails) < 6:
-                    fails.append(f"{src} -> {dst} ({dst_ip})")
-    if fail == 0:
+    """Pairwise ping across all 8 workers — expect 56/56 OK.
+
+    The 56 pings are independent, so run them concurrently. Sequentially, a
+    fully unreachable fabric costs 56 x the 2s ping timeout (~112s) of dead
+    air — which stalls Submit, idles out the SSE stream (triggering an
+    EventSource reconnect that restarts the whole run), and even on success
+    leaves this row hanging ~8s. Parallel, the whole mesh is bounded by about
+    one ping timeout. docker_exec is already used concurrently elsewhere
+    (see labruns._apply_configs), so this is safe.
+    """
+    pairs = [(src, dst) for src in WORKERS for dst in WORKERS if src != dst]
+
+    def _ping(pair):
+        src, dst = pair
+        dst_ip = WORKER_FABRIC_IP[dst]
+        rc, _ = docker_exec(src, ["ping", "-c", "1", "-W", "2", "-q", dst_ip], timeout=5)
+        return src, dst, dst_ip, rc == 0
+
+    with ThreadPoolExecutor(max_workers=28) as pool:
+        results = list(pool.map(_ping, pairs))
+
+    fails = [f"{src} -> {dst} ({ip})" for src, dst, ip, good in results if not good]
+    ok = len(results) - len(fails)
+    if not fails:
         return True, f"all {ok}/56 worker-to-worker pings succeeded", None
-    detail = f"{fail} failures (showing up to 6):\n  " + "\n  ".join(fails)
-    return False, f"{ok}/56 pings OK, {fail} failed", detail
+    detail = f"{len(fails)} failures (showing up to 6):\n  " + "\n  ".join(fails[:6])
+    return False, f"{ok}/56 pings OK, {len(fails)} failed", detail
 
 
 # ---- registry ---------------------------------------------------------------
