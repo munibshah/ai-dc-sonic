@@ -5,16 +5,21 @@ import Link from "next/link";
 import { ToastsProvider } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
 import AccountControl from "@/components/AccountControl";
+import PrimaryNav from "@/components/PrimaryNav";
 
 export const metadata: Metadata = {
   title: "AI DC Training Course",
   description: "AI Data Center lab — fabric, telemetry, and collective ops",
+  manifest: "/site.webmanifest",
   icons: {
     icon: [
-      { url: "/lion_16x16.png", sizes: "16x16", type: "image/png" },
-      { url: "/lion-logo.png", sizes: "512x512", type: "image/png" },
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/android-chrome-192x192.png", sizes: "192x192", type: "image/png" },
+      { url: "/android-chrome-512x512.png", sizes: "512x512", type: "image/png" },
     ],
-    apple: "/lion-logo.png",
+    apple: "/apple-touch-icon.png",
   },
 };
 
@@ -26,7 +31,7 @@ const NO_FLASH_THEME = `
 (function(){
   try {
     var t = localStorage.getItem("aidc-theme");
-    if (t === "vesper" || t === "default") {
+    if (t === "vesper" || t === "light" || t === "default") {
       document.documentElement.setAttribute("data-theme", t);
     } else {
       document.documentElement.setAttribute("data-theme", "default");
@@ -49,7 +54,7 @@ export default function RootLayout({
       </head>
       <body>
         <ToastsProvider>
-          <header className="border-b border-white/10 bg-[#0b1020] sticky top-0 z-40 backdrop-blur-sm">
+          <header className="border-b border-white/10 bg-[var(--surface-canvas-deep)] sticky top-0 z-40 backdrop-blur-sm">
             <div className="mx-auto max-w-7xl px-4 py-3 flex items-center gap-6">
               <Link
                 href="/"
@@ -77,10 +82,7 @@ export default function RootLayout({
                   </span>
                 </span>
               </Link>
-              <nav className="text-sm text-white/70 flex gap-5">
-                <Link href="/" className="hover:text-white transition-colors">Labs</Link>
-                <a href="/portal" className="hover:text-white transition-colors">Book a slot</a>
-              </nav>
+              <PrimaryNav />
               <div className="ml-auto flex items-center gap-4">
                 <AccountControl />
                 <ThemeToggle />

@@ -36,6 +36,21 @@ export interface Env {
   APP_BASE_URL?: string;
 }
 
+// ---- booking schedule -------------------------------------------------------
+// The single shared fabric is bookable 24/7 as a 4-hour window starting at any
+// 30-minute mark (or "right now"). There is no pre-generated grid: the `slots`
+// table holds only real bookings, and availability is the complement of those
+// booked windows. The single-fabric invariant (no two reservations overlap) is
+// enforced at book time by an atomic overlap-guarded insert. Learners always
+// see times in their own local zone.
+
+const SLOT_MS = 4 * 3_600_000; // 4-hour session duration
+const STEP_MS = 30 * 60_000; // start-time granularity surfaced in the UI (informational)
+const HORIZON_MS = 14 * 86_400_000; // how far ahead a window may be booked
+const ALIGN_MS = 5 * 60_000; // lenient server-side start alignment (accepts every tz's 30-min local starts)
+const MAX_ACTIVE = 1; // at most one upcoming booking per learner
+// No lifetime cap in beta. `used` is still computed for telemetry but never gates.
+
 // ---- small helpers ----------------------------------------------------------
 
 function uuid(): string {
@@ -44,6 +59,22 @@ function uuid(): string {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Per-learner booking counts: upcoming (active) + total ever booked (telemetry). */
+async function bookingCounts(env: Env, email: string): Promise<{ active: number; used: number }> {
+  const now = nowIso();
+  const active: any = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM slots WHERE holder_email = ?1 AND status = 'booked' AND ends_at > ?2",
+  )
+    .bind(email, now)
+    .first();
+  const used: any = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM slots WHERE holder_email = ?1 AND status = 'booked'",
+  )
+    .bind(email)
+    .first();
+  return { active: active?.n ?? 0, used: used?.n ?? 0 };
 }
 
 function appBase(env: Env): string {
@@ -188,96 +219,140 @@ async function publicNextTraining(env: Env, origin: string | null): Promise<Resp
   return json({ session: { title: s.title, starts_at: s.starts_at, seats_left } }, {}, origin);
 }
 
+// Marketing teaser. Availability is continuous now, so "N open slots" is
+// meaningless — report whether the fabric is free right now and, if not, when it
+// next frees up (the live booking's end).
 async function publicAvailability(env: Env, origin: string | null): Promise<Response> {
   const now = nowIso();
-  const cnt: any = await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM slots WHERE status = 'available' AND starts_at >= ?1",
+  const live: any = await env.DB.prepare(
+    `SELECT ends_at FROM slots
+      WHERE status = 'booked' AND starts_at <= ?1 AND ends_at > ?1
+      ORDER BY ends_at DESC LIMIT 1`,
   )
     .bind(now)
     .first();
-  const nxt: any = await env.DB.prepare(
-    "SELECT starts_at FROM slots WHERE status = 'available' AND starts_at >= ?1 ORDER BY starts_at ASC LIMIT 1",
-  )
-    .bind(now)
-    .first();
-  return json({ open: cnt?.n ?? 0, next_slot: nxt?.starts_at ?? null }, {}, origin);
+  return json({ open: !live, next_free: live?.ends_at ?? now }, {}, origin);
 }
 
 // ---- slots ------------------------------------------------------------------
 
-// GET /api/slots?from=&to=  — available slots in the window + the caller's own bookings.
+// GET /api/slots?from=&to=  — only the BOOKED windows in range. The calendar
+// computes availability as the complement of these (any 30-min start whose
+// 4-hour window doesn't overlap a booked one). Other learners' emails are never
+// exposed: someone else's booking is just an opaque `{mine:false}` block. Also
+// returns the caller's active-booking limit so the UI can message in one call.
 async function listSlots(req: Request, env: Env, email: string, origin: string | null): Promise<Response> {
   const url = new URL(req.url);
   const from = url.searchParams.get("from") ?? nowIso();
-  const to = url.searchParams.get("to") ?? new Date(Date.now() + 30 * 86400_000).toISOString();
+  const to = url.searchParams.get("to") ?? new Date(Date.now() + HORIZON_MS).toISOString();
   const rows = await env.DB.prepare(
-    `SELECT id, starts_at, ends_at, status, payment_status, holder_email
+    `SELECT id, starts_at, ends_at, holder_email
        FROM slots
-      WHERE ends_at >= ?1 AND starts_at <= ?2
-        AND (status = 'available' OR holder_email = ?3)
+      WHERE status = 'booked' AND ends_at >= ?1 AND starts_at <= ?2
       ORDER BY starts_at ASC`,
   )
-    .bind(from, to, email)
+    .bind(from, to)
     .all();
-  const slots = (rows.results ?? []).map((s: any) => ({
+  const booked = (rows.results ?? []).map((s: any) => ({
     id: s.id,
     starts_at: s.starts_at,
     ends_at: s.ends_at,
-    status: s.status,
-    payment_status: s.payment_status,
     mine: s.holder_email === email,
   }));
-  return json({ slots }, {}, origin);
+  const { active } = await bookingCounts(env, email);
+  return json(
+    {
+      booked,
+      config: { slot_minutes: SLOT_MS / 60_000, step_minutes: STEP_MS / 60_000, horizon_days: HORIZON_MS / 86_400_000 },
+      limits: { active, max_active: MAX_ACTIVE },
+    },
+    {},
+    origin,
+  );
 }
 
-// POST /api/slots/:id/book  — atomic claim; 409 if already taken. Emails on success.
-async function bookSlot(id: string, env: Env, ctx: ExecutionContext, email: string, origin: string | null): Promise<Response> {
+// POST /api/slots/book  — body {starts_at?, start_now?}. Create a 4-hour booking
+// beginning at the chosen 30-min mark (or right now). Atomic overlap guard keeps
+// the single fabric to one reservation at a time. Emails an iCal invite.
+async function bookSlot(req: Request, env: Env, ctx: ExecutionContext, email: string, origin: string | null): Promise<Response> {
+  let body: { starts_at?: string; start_now?: boolean; tz?: string } = {};
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    /* empty body ⇒ start now */
+  }
+  const now = Date.now();
+
+  // Resolve the start. An immediate "start now" books at the literal current
+  // instant and bypasses the past/alignment checks (it is, by definition, now).
+  const isNow = Boolean(body.start_now) || !body.starts_at;
+  let startMs: number;
+  if (isNow) {
+    startMs = now;
+  } else {
+    startMs = new Date(body.starts_at as string).getTime();
+    if (Number.isNaN(startMs)) return err(400, "Invalid start time.", origin);
+    if (startMs < now - 60_000) return err(422, "That start time is in the past.", origin);
+    if (startMs > now + HORIZON_MS) return err(422, "That start time is beyond the 14-day window.", origin);
+    // Lenient alignment: a 5-minute grid accepts every timezone's 30-minute local
+    // starts (incl. half-hour zones) while rejecting arbitrary instants.
+    if (startMs % ALIGN_MS !== 0) return err(422, "Pick a start on a 30-minute mark.", origin);
+  }
+  const startIso = new Date(startMs).toISOString();
+  const endIso = new Date(startMs + SLOT_MS).toISOString();
+
+  // One upcoming booking per learner (no lifetime cap in beta).
+  const { active } = await bookingCounts(env, email);
+  if (active >= MAX_ACTIVE) {
+    return err(409, "You already have an upcoming session. Book another once it ends.", origin);
+  }
+
+  // Atomic, overlap-safe insert. Under D1's single-writer model the NOT EXISTS
+  // probe and the insert are one serialized statement, so two overlapping
+  // bookings can't both succeed. Half-open test: adjacent windows that touch at a
+  // boundary (1AM–5AM after 9PM–1AM) do NOT overlap and are both allowed.
+  const id = uuid();
   const res = await env.DB.prepare(
-    `UPDATE slots SET holder_email = ?1, status = 'booked'
-      WHERE id = ?2 AND status = 'available'`,
+    `INSERT INTO slots (id, starts_at, ends_at, holder_email, status, payment_status, created_at)
+     SELECT ?1, ?2, ?3, ?4, 'booked', 'free', ?5
+     WHERE NOT EXISTS (
+       SELECT 1 FROM slots
+        WHERE status = 'booked' AND starts_at < ?3 AND ends_at > ?2
+     )`,
   )
-    .bind(email, id)
+    .bind(id, startIso, endIso, email, nowIso())
     .run();
   if (!res.meta.changes) {
-    const exists = await env.DB.prepare("SELECT 1 FROM slots WHERE id = ?1").bind(id).first();
-    return err(exists ? 409 : 404, exists ? "Slot already booked" : "No such slot", origin);
+    return err(409, "That window overlaps an existing reservation — pick another start.", origin);
   }
 
-  const slot: any = await env.DB.prepare("SELECT starts_at, ends_at FROM slots WHERE id = ?1").bind(id).first();
-  if (slot) {
-    const base = appBase(env);
-    const tmpl = bookingEmail({
-      startUtc: slot.starts_at,
-      endUtc: slot.ends_at,
-      launchUrl: `${base}/portal`,
-      cancelUrl: `${base}/portal`,
-    });
-    const ics = buildIcs({
-      uid: `slot-${id}@aidc`,
-      start: slot.starts_at,
-      end: slot.ends_at,
-      stamp: nowIso(),
-      summary: "AIDC Lab — hands-on fabric session",
-      description: "Exclusive hands-on access to the AI DC lab fabric. Open the workbench and click Start.",
-      url: `${base}/portal`,
-    });
-    ctx.waitUntil(
-      sendEmail(env, { to: email, ...tmpl, attachments: [{ filename: "aidc-lab-session.ics", content: b64(ics) }] }),
-    );
-  }
-  return json({ ok: true, id, status: "booked" }, {}, origin);
+  const base = appBase(env);
+  const tmpl = bookingEmail({ startUtc: startIso, endUtc: endIso, launchUrl: `${base}/portal`, cancelUrl: `${base}/portal`, tz: body.tz });
+  const ics = buildIcs({
+    uid: `slot-${id}@aidc`,
+    start: startIso,
+    end: endIso,
+    stamp: nowIso(),
+    summary: "AIDC Lab — hands-on fabric session",
+    description: "Exclusive hands-on access to the AI DC lab fabric. Open the workbench and click Start.",
+    url: `${base}/portal`,
+  });
+  ctx.waitUntil(
+    sendEmail(env, { to: email, ...tmpl, attachments: [{ filename: "aidc-lab-session.ics", content: b64(ics) }] }),
+  );
+  return json({ ok: true, id, starts_at: startIso, ends_at: endIso, status: "booked" }, {}, origin);
 }
 
-// POST /api/slots/:id/cancel  — release a slot the caller holds.
+// POST /api/slots/:id/cancel  — hard-delete a booking the caller holds, freeing
+// the window immediately. Cancelling never counts against the learner.
 async function cancelSlot(id: string, env: Env, email: string, origin: string | null): Promise<Response> {
   const res = await env.DB.prepare(
-    `UPDATE slots SET holder_email = NULL, status = 'available'
-      WHERE id = ?1 AND holder_email = ?2`,
+    "DELETE FROM slots WHERE id = ?1 AND holder_email = ?2 AND status = 'booked'",
   )
     .bind(id, email)
     .run();
-  if (!res.meta.changes) return err(403, "You don't hold that slot", origin);
-  return json({ ok: true, id, status: "available" }, {}, origin);
+  if (!res.meta.changes) return err(403, "You don't hold that booking", origin);
+  return json({ ok: true, id, status: "cancelled" }, {}, origin);
 }
 
 // ---- training roster --------------------------------------------------------
@@ -344,11 +419,13 @@ async function signupTraining(id: string, req: Request, env: Env, ctx: Execution
   }
 
   let name: string | null = null;
+  let tz: string | undefined;
   try {
-    const body = (await req.json()) as { name?: string };
+    const body = (await req.json()) as { name?: string; tz?: string };
     name = body?.name ?? null;
+    tz = body?.tz;
   } catch {
-    /* name optional */
+    /* name + tz optional */
   }
 
   await env.DB.prepare(
@@ -360,7 +437,7 @@ async function signupTraining(id: string, req: Request, env: Env, ctx: Execution
     .run();
 
   if (!already) {
-    const tmpl = trainingEmail({ title: session.title, startUtc: session.starts_at, location: session.location });
+    const tmpl = trainingEmail({ title: session.title, startUtc: session.starts_at, location: session.location, tz });
     const ics = buildIcs({
       uid: `training-${id}@aidc`,
       start: session.starts_at,
@@ -452,6 +529,39 @@ async function adminCreateSlots(req: Request, env: Env, origin: string | null): 
   return json({ ok: true, created: created.length }, {}, origin);
 }
 
+// GET /api/admin/bookings — instructor-only ledger of everything booked: every
+// self-serve fabric reservation (with the booker's email) plus the full
+// instructor-led training roster. The instructor gate is applied by the router
+// (path.startsWith("/api/admin/") => email === INSTRUCTOR_EMAIL), so this is the
+// only place learner emails are exposed; the learner-facing /api/slots never is.
+async function adminListBookings(env: Env, origin: string | null): Promise<Response> {
+  const now = nowIso();
+  const labRows = await env.DB.prepare(
+    `SELECT id, holder_email, starts_at, ends_at, payment_status, created_at
+       FROM slots WHERE status = 'booked' ORDER BY starts_at DESC`,
+  ).all();
+  const trainingRows = await env.DB.prepare(
+    `SELECT su.id, su.email, su.name, su.created_at,
+            ts.id AS session_id, ts.title AS session_title, ts.starts_at AS session_starts_at
+       FROM training_signups su
+       JOIN training_sessions ts ON ts.id = su.session_id
+      ORDER BY ts.starts_at DESC, su.created_at ASC`,
+  ).all();
+
+  const lab_bookings = (labRows.results ?? []) as any[];
+  const upcoming = lab_bookings.filter((b) => b.ends_at > now).length;
+  return json(
+    {
+      generated_at: now,
+      summary: { lab_total: lab_bookings.length, lab_upcoming: upcoming, training_signups: (trainingRows.results ?? []).length },
+      lab_bookings,
+      training_signups: trainingRows.results ?? [],
+    },
+    {},
+    origin,
+  );
+}
+
 async function adminCreateTraining(req: Request, env: Env, origin: string | null): Promise<Response> {
   const body = (await req.json()) as { title?: string; starts_at?: string; capacity?: number | null; location?: string | null };
   if (!body.title || !body.starts_at) return err(400, "title and starts_at are required", origin);
@@ -503,6 +613,7 @@ export default {
     // Admin (instructor only).
     if (path.startsWith("/api/admin/")) {
       if (email !== env.INSTRUCTOR_EMAIL.toLowerCase()) return err(403, "Instructor only", origin);
+      if (path === "/api/admin/bookings" && method === "GET") return adminListBookings(env, origin);
       if (path === "/api/admin/slots" && method === "POST") return adminCreateSlots(req, env, origin);
       if (path === "/api/admin/training" && method === "POST") return adminCreateTraining(req, env, origin);
       return err(404, "Unknown admin route", origin);
@@ -510,9 +621,8 @@ export default {
 
     // Slots.
     if (path === "/api/slots" && method === "GET") return listSlots(req, env, email, origin);
-    let m = path.match(/^\/api\/slots\/([^/]+)\/book$/);
-    if (m && method === "POST") return bookSlot(m[1], env, ctx, email, origin);
-    m = path.match(/^\/api\/slots\/([^/]+)\/cancel$/);
+    if (path === "/api/slots/book" && method === "POST") return bookSlot(req, env, ctx, email, origin);
+    let m = path.match(/^\/api\/slots\/([^/]+)\/cancel$/);
     if (m && method === "POST") return cancelSlot(m[1], env, email, origin);
 
     // Fabric-holder status (banner).

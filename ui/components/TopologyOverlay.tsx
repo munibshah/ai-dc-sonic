@@ -21,7 +21,7 @@ export default function TopologyOverlay({ devices, onPickNode, onClose }: Props)
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col bg-black/85 backdrop-blur-sm p-6"
+      className="on-dark fixed inset-0 z-50 flex flex-col bg-black/85 backdrop-blur-sm p-6"
       role="dialog"
       aria-label="Topology"
     >
@@ -40,7 +40,7 @@ export default function TopologyOverlay({ devices, onPickNode, onClose }: Props)
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 rounded-lg border border-white/10 bg-black/40 p-2 overflow-auto">
+      <div className="flex-1 min-h-0 rounded-lg border border-white/10 bg-[#0b1020] p-2 overflow-auto">
         <TopologyDiagram
           devices={devices}
           onNodeClick={(name) => {

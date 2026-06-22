@@ -120,6 +120,37 @@ def require_fabric_holder(request: Request) -> Optional[str]:
     return email
 
 
+def require_fabric_resettable(request: Request) -> Optional[str]:
+    """FastAPI dependency for the end-session / expiry baseline reset.
+
+    Looser than require_fabric_holder: a reset-to-baseline is allowed when the
+    caller currently holds the fabric (an explicit "end session early") OR when
+    *nobody* holds it (the caller's window has just lapsed — the timer expired).
+    It is denied only when a *different* learner holds the fabric now, so one
+    learner can never wipe another's live session out from under them.
+    """
+    if not _enabled():
+        return caller_email(request)
+
+    email = caller_email(request)
+    if not email:
+        raise HTTPException(status_code=403, detail="Sign in to use the lab.")
+
+    try:
+        holder, ends_at = _current_holder()
+    except RuntimeError as e:
+        if _fail_open():
+            return email
+        raise HTTPException(status_code=503, detail=str(e))
+
+    if holder is not None and holder != email:
+        raise HTTPException(
+            status_code=423,
+            detail=f"Fabric reserved by another learner{_fmt_until(ends_at)}.",
+        )
+    return email
+
+
 def ws_denial(ws) -> Optional[str]:
     """WebSocket variant of the gate (the console shell).
 

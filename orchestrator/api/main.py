@@ -35,7 +35,7 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import booking_gate, db, labruns, netdev_exporter
-from .booking_gate import require_fabric_holder
+from .booking_gate import require_fabric_holder, require_fabric_resettable
 
 # ---- topology truth ---------------------------------------------------------
 # Hand-coded so we don't depend on `containerlab inspect` being installed in
@@ -253,6 +253,64 @@ def _require_lab(lab_id: str) -> dict:
     raise HTTPException(status_code=404, detail=f"lab {lab_id!r} not found")
 
 
+# ---- sequential lab progression --------------------------------------------
+# The labs form a guided journey: Lab 1 is open from the start; each subsequent
+# lab unlocks only once the previous one has been cleared (Submit passed all
+# checks). Progress is scoped to the orchestrator session (the booking sitting),
+# tracked in the existing lab_runs table — no separate progress store.
+def _active_labs() -> List[dict]:
+    return [e for e in _load_labs_registry() if e.get("status") == "active"]
+
+
+def _lab_unlocked(sid: str, lab_id: str) -> bool:
+    """A lab is unlocked iff it's the first in the journey or its predecessor
+    has been passed in this session. (Cleared labs stay unlocked, so a learner
+    can revisit/replay them.)"""
+    entry = next((e for e in _load_labs_registry() if e.get("id") == lab_id), None)
+    if entry is None:
+        return False
+    prev_id = entry.get("previous_lab_id")
+    if not prev_id:
+        return True  # first lab — always open
+    return db.get_lab_run(sid, prev_id).get("state") == "passed"
+
+
+def _require_unlocked(sid: str, lab_id: str) -> None:
+    if not _lab_unlocked(sid, lab_id):
+        entry = next((e for e in _load_labs_registry() if e.get("id") == lab_id), None)
+        prev_id = entry.get("previous_lab_id") if entry else None
+        raise HTTPException(status_code=403, detail=f"Locked — clear Lab {prev_id} first.")
+
+
+@app.get("/api/progress")
+def get_progress(sid: str = Depends(session_id)):
+    """The learner's journey: per-lab state + unlock status, and the lab to
+    resume at (first unlocked, not-yet-passed lab; the last lab once all are
+    cleared)."""
+    labs = _active_labs()
+    out: List[dict] = []
+    current: str | None = None
+    for entry in labs:
+        lab_id = entry.get("id")
+        state = db.get_lab_run(sid, lab_id).get("state", "not_started")
+        unlocked = _lab_unlocked(sid, lab_id)
+        passed = state == "passed"
+        out.append(
+            {
+                "id": lab_id,
+                "title": entry.get("title"),
+                "state": state,
+                "unlocked": unlocked,
+                "passed": passed,
+            }
+        )
+        if current is None and unlocked and not passed:
+            current = lab_id
+    if current is None and out:
+        current = out[-1]["id"]  # everything cleared — journey complete
+    return {"labs": out, "current": current}
+
+
 @app.get("/api/labs/{lab_id}/checkpoints")
 def get_checkpoints(lab_id: str):
     _require_lab(lab_id)
@@ -272,6 +330,7 @@ def post_start(
     _holder: str | None = Depends(require_fabric_holder),
 ):
     _require_lab(lab_id)
+    _require_unlocked(sid, lab_id)
     try:
         labruns.bootstrap_lab(lab_id)
     except Exception as e:
@@ -279,6 +338,22 @@ def post_start(
         raise HTTPException(status_code=500, detail=f"bootstrap failed: {e}")
     run = db.start_lab_run(sid, lab_id)
     db.log_event(sid, lab_id, "start", passed=True)
+    return run
+
+
+@app.post("/api/labs/{lab_id}/begin")
+def post_begin(
+    lab_id: str,
+    sid: str = Depends(session_id),
+    _holder: str | None = Depends(require_fabric_holder),
+):
+    """Enter a lab WITHOUT bootstrapping — used to auto-advance to the next lab.
+    The fabric carries forward from the lab you just cleared (labs build on each
+    other), so no config is pushed; this only marks the lab in progress."""
+    _require_lab(lab_id)
+    _require_unlocked(sid, lab_id)
+    run = db.begin_lab_run(sid, lab_id)
+    db.log_event(sid, lab_id, "begin", passed=True)
     return run
 
 
@@ -300,6 +375,7 @@ def post_solve(
     _holder: str | None = Depends(require_fabric_holder),
 ):
     _require_lab(lab_id)
+    _require_unlocked(sid, lab_id)
     try:
         labruns.solve_lab(lab_id)
     except Exception as e:
@@ -313,6 +389,7 @@ def post_solve(
 @app.post("/api/labs/{lab_id}/check/{checkpoint}")
 def post_check(lab_id: str, checkpoint: str, sid: str = Depends(session_id)):
     _require_lab(lab_id)
+    _require_unlocked(sid, lab_id)
     try:
         result = labruns.run_checkpoint(lab_id, checkpoint)
     except ValueError as e:
@@ -324,6 +401,7 @@ def post_check(lab_id: str, checkpoint: str, sid: str = Depends(session_id)):
 @app.post("/api/labs/{lab_id}/submit")
 def post_submit(lab_id: str, sid: str = Depends(session_id)):
     _require_lab(lab_id)
+    _require_unlocked(sid, lab_id)
     try:
         result = labruns.run_submit(lab_id)
     except ValueError as e:
@@ -352,6 +430,7 @@ def get_submit_stream(lab_id: str, sid: str = Depends(session_id)):
       - done:   {passed, duration_ms, run}                  once at the end
     """
     _require_lab(lab_id)
+    _require_unlocked(sid, lab_id)
     checkpoints = labruns.list_checkpoints(lab_id)
     total = len(checkpoints)
     import time as _time
@@ -387,6 +466,63 @@ def get_submit_stream(lab_id: str, sid: str = Depends(session_id)):
                 "run": db.get_lab_run(sid, lab_id),
             },
         )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+# ---- session end / expiry reset --------------------------------------------
+# Ending a booking session (or its timer lapsing) wipes the shared fabric back
+# to Lab 1's bare `_skeleton` so the next learner starts from a clean slate.
+# The learner's per-lab unlock progress is intentionally left untouched — each
+# lab's Start/Reset re-lays its own cumulative state, so progress and fabric
+# stay consistent without forfeiting cleared labs. Gated by
+# require_fabric_resettable (holder OR nobody — see booking_gate).
+@app.post("/api/session/end")
+def post_session_end(
+    sid: str = Depends(session_id),
+    _holder: str | None = Depends(require_fabric_resettable),
+):
+    try:
+        labruns.bootstrap_lab("1")
+    except Exception as e:
+        db.log_event(sid, "1", "session_end_reset", passed=False, detail={"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"reset failed: {e}")
+    db.log_event(sid, "1", "session_end_reset", passed=True)
+    return {"ok": True}
+
+
+@app.get("/api/session/end/stream")
+def get_session_end_stream(
+    sid: str = Depends(session_id),
+    _holder: str | None = Depends(require_fabric_resettable),
+):
+    """SSE variant of /api/session/end — streams per-switch reset progress so the
+    learner can watch the fabric being wiped back to Lab 1.
+
+    Events:
+      - progress: {label, switch, done, total}   one per reset step
+      - done:     {ok: true}                      once the fabric is clean
+      - error:    {message}                       on failure
+    """
+
+    def event_stream():
+        try:
+            for ev in labruns.iter_reset_to_baseline():
+                yield _sse("progress", ev)
+        except Exception as e:
+            db.log_event(sid, "1", "session_end_reset", passed=False, detail={"error": str(e)})
+            yield _sse("error", {"message": str(e)})
+            return
+        db.log_event(sid, "1", "session_end_reset", passed=True)
+        yield _sse("done", {"ok": True})
 
     return StreamingResponse(
         event_stream(),

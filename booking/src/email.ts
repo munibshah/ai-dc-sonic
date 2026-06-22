@@ -110,12 +110,27 @@ const SHELL = (body: string) =>
      <div style="font-size:12px;color:#888">AI Data Center networking labs · hands-on SONiC/FRR fabrics</div>
    </div>`;
 
-function fmtUtc(iso: string): string {
-  // Human-friendly UTC string; the .ics carries the exact instant for local cal.
+// Human-friendly timestamp in the recipient's timezone (passed from the browser
+// at booking time as an IANA name, e.g. "America/New_York"). Always carries the
+// zone abbreviation so there's no ambiguity. Falls back to clearly-labelled UTC
+// when no/invalid tz is supplied. The .ics still carries the exact UTC instant.
+function fmtWhen(iso: string, tz?: string): string {
   try {
-    return new Date(iso).toUTCString().replace("GMT", "UTC");
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+      timeZone: tz || "UTC",
+    }).format(new Date(iso));
   } catch {
-    return iso;
+    try {
+      return new Date(iso).toUTCString().replace("GMT", "UTC");
+    } catch {
+      return iso;
+    }
   }
 }
 
@@ -136,18 +151,21 @@ export function bookingEmail(opts: {
   endUtc: string;
   launchUrl: string;
   cancelUrl: string;
+  tz?: string;
 }): { subject: string; html: string; text: string } {
+  const start = fmtWhen(opts.startUtc, opts.tz);
+  const end = fmtWhen(opts.endUtc, opts.tz);
   return {
-    subject: `Lab slot confirmed — ${fmtUtc(opts.startUtc)}`,
+    subject: `Lab slot confirmed — ${start}`,
     html: SHELL(
       `<p>Your hands-on lab slot is reserved. You'll have <b>exclusive access to the fabric</b> for this window.</p>
-       <p><b>${fmtUtc(opts.startUtc)}</b> &rarr; ${fmtUtc(opts.endUtc)}<br/>
+       <p><b>${start}</b> &rarr; ${end}<br/>
        <span style="font-size:12px;color:#888">A calendar invite is attached — it shows in your local time.</span></p>
        <p>When your slot starts, open the workbench and click Start:</p>
        <p><a href="${opts.launchUrl}" style="display:inline-block;background:#0ea5e9;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Launch the lab</a></p>
        <p style="font-size:12px;color:#888">Can't make it? <a href="${opts.cancelUrl}">Cancel this booking</a> to free the slot for others.</p>`,
     ),
-    text: `Lab slot confirmed.\n${fmtUtc(opts.startUtc)} -> ${fmtUtc(opts.endUtc)} (calendar invite attached)\n\nLaunch: ${opts.launchUrl}\nCancel: ${opts.cancelUrl}`,
+    text: `Lab slot confirmed.\n${start} -> ${end} (calendar invite attached)\n\nLaunch: ${opts.launchUrl}\nCancel: ${opts.cancelUrl}`,
   };
 }
 
@@ -155,15 +173,17 @@ export function trainingEmail(opts: {
   title: string;
   startUtc: string;
   location: string | null;
+  tz?: string;
 }): { subject: string; html: string; text: string } {
+  const when = fmtWhen(opts.startUtc, opts.tz);
   return {
     subject: `You're registered — ${opts.title}`,
     html: SHELL(
       `<p>You're on the roster for the live instructor-led session.</p>
-       <p><b>${opts.title}</b><br/>${fmtUtc(opts.startUtc)}<br/>
+       <p><b>${opts.title}</b><br/>${when}<br/>
        ${opts.location ? `<span style="font-size:13px">${opts.location}</span>` : ""}</p>
        <p style="font-size:12px;color:#888">A calendar invite is attached. Joining details follow before the session.</p>`,
     ),
-    text: `You're registered for ${opts.title}\n${fmtUtc(opts.startUtc)}\n${opts.location ?? ""}\n(calendar invite attached)`,
+    text: `You're registered for ${opts.title}\n${when}\n${opts.location ?? ""}\n(calendar invite attached)`,
   };
 }

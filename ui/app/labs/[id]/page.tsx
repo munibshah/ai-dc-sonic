@@ -33,7 +33,7 @@ export default function LabPreviewPage() {
 
   const cta = canLaunch
     ? { href: `/portal/labs/${id}`, label: "Launch this lab", cls: "btn-success" }
-    : { href: "/portal", label: "Book a slot to run this lab", cls: "btn-primary" };
+    : { href: "/portal/book", label: "Book a slot to run this lab", cls: "btn-primary" };
 
   if (error)
     return (
@@ -110,7 +110,7 @@ export default function LabPreviewPage() {
       <div className="my-10 rounded-2xl border border-white/10 bg-black/20 p-8 text-center">
         <p className="text-white/80 text-lg font-medium">Ready to get hands-on with a real fabric?</p>
         <p className="text-white/50 text-sm mt-1">Book a slot and the fabric is yours for the window.</p>
-        <a href="/portal" className="btn btn-primary btn-lg mt-5">
+        <a href="/portal/book" className="btn btn-primary btn-lg mt-5">
           Book your slot <ArrowRight className="w-4 h-4" />
         </a>
       </div>

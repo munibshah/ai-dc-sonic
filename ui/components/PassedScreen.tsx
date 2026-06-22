@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import type { Lab, LabRun } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { beginLab, fetchProgress, type Lab, type LabRun } from "@/lib/api";
 import { Check, ArrowRight } from "@/components/icons";
 
 interface Props {
@@ -12,6 +14,39 @@ interface Props {
 
 export default function PassedScreen({ lab, run, onDismiss }: Props) {
   const duration = formatDuration(run.started_at, run.passed_at);
+  const router = useRouter();
+  // The next active lab in the journey (null = this was the last one).
+  const [nextId, setNextId] = useState<string | null>(null);
+  const [advancing, setAdvancing] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    fetchProgress()
+      .then((p) => {
+        if (!alive) return;
+        const idx = p.labs.findIndex((l) => l.id === lab.id);
+        setNextId(idx >= 0 && idx < p.labs.length - 1 ? p.labs[idx + 1].id : null);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [lab.id]);
+
+  // Continue: begin the next lab (no bootstrap — carry the fabric forward), then go.
+  async function onContinue() {
+    if (!nextId || advancing) return;
+    setAdvancing(true);
+    try {
+      await beginLab(nextId);
+    } catch {
+      /* the workbench will surface any issue; navigate regardless */
+    }
+    onDismiss();
+    router.push(`/portal/labs/${nextId}`);
+  }
+
+  const complete = nextId === null;
 
   return (
     <div
@@ -19,15 +54,21 @@ export default function PassedScreen({ lab, run, onDismiss }: Props) {
       onClick={onDismiss}
     >
       <div
-        className="max-w-lg w-full rounded-2xl border border-emerald-400/40 bg-gradient-to-b from-emerald-950 to-slate-950 p-6 shadow-2xl"
+        className="on-dark max-w-lg w-full rounded-2xl border border-emerald-400/40 bg-gradient-to-b from-emerald-950 to-slate-950 p-6 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="text-center">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-300 mb-3 border border-emerald-400/40">
             <Check className="w-8 h-8" />
           </div>
-          <h2 className="text-2xl font-semibold text-white">Lab complete</h2>
-          <p className="mt-1 text-emerald-200/90">You finished <strong>{lab.title}</strong>.</p>
+          <h2 className="text-2xl font-semibold text-white">{complete ? "Journey complete" : "Lab complete"}</h2>
+          <p className="mt-1 text-emerald-200/90">
+            {complete ? (
+              <>You finished <strong>{lab.title}</strong> — and the whole journey. 🎉</>
+            ) : (
+              <>You finished <strong>{lab.title}</strong>. Lab {nextId} is now unlocked.</>
+            )}
+          </p>
         </div>
 
         <dl className="mt-5 grid grid-cols-3 gap-3 text-center">
@@ -37,13 +78,23 @@ export default function PassedScreen({ lab, run, onDismiss }: Props) {
         </dl>
 
         <div className="mt-6 flex flex-col gap-2">
-          <Link
-            href={`/portal/labs/${nextLabId(lab.id)}`}
-            className="flex items-center justify-center gap-2 text-center px-4 py-2 rounded-lg border border-emerald-400/60 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 font-semibold transition-colors"
-            onClick={onDismiss}
-          >
-            Continue to Lab {nextLabId(lab.id)} <ArrowRight className="w-4 h-4" />
-          </Link>
+          {complete ? (
+            <Link
+              href="/portal"
+              onClick={onDismiss}
+              className="flex items-center justify-center gap-2 text-center px-4 py-2 rounded-lg border border-emerald-400/60 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 font-semibold transition-colors"
+            >
+              Back to your journey <ArrowRight className="w-4 h-4" />
+            </Link>
+          ) : (
+            <button
+              onClick={onContinue}
+              disabled={advancing}
+              className="flex items-center justify-center gap-2 text-center px-4 py-2 rounded-lg border border-emerald-400/60 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-100 font-semibold transition-colors disabled:opacity-50"
+            >
+              {advancing ? "Setting up…" : <>Continue to Lab {nextId} <ArrowRight className="w-4 h-4" /></>}
+            </button>
+          )}
           <button
             onClick={onDismiss}
             className="block text-center px-4 py-2 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 text-white/80 text-sm"
@@ -74,9 +125,4 @@ function formatDuration(startIso: string | null, endIso: string | null): string 
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}m ${s.toString().padStart(2, "0")}s`;
-}
-
-function nextLabId(current: string): string {
-  const n = Number(current);
-  return Number.isFinite(n) && n > 0 ? String(n + 1) : "2";
 }

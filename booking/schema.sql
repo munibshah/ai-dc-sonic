@@ -10,19 +10,29 @@
 --   training_signups  — the roster rows.
 
 -- Exclusive fabric reservations (self-serve). All timestamps are ISO-8601 UTC.
+-- This table now holds ONLY real bookings (status='booked'); there is no
+-- pre-generated grid. Availability is the complement of these rows. A 4-hour
+-- window may start at any 30-minute mark; the no-overlap invariant is enforced
+-- at book time by an atomic INSERT ... WHERE NOT EXISTS(overlap) in the Worker.
 CREATE TABLE IF NOT EXISTS slots (
   id             TEXT PRIMARY KEY,
   starts_at      TEXT NOT NULL,
   ends_at        TEXT NOT NULL,
-  holder_email   TEXT,                                   -- NULL while available
-  status         TEXT NOT NULL DEFAULT 'available',      -- available | booked | cancelled
+  holder_email   TEXT,                                   -- the booker
+  status         TEXT NOT NULL DEFAULT 'available',      -- 'booked' in practice (available is computed, not stored)
   payment_status TEXT NOT NULL DEFAULT 'free',           -- free | pending | paid  (paid-ready seam; always 'free' today)
   created_at     TEXT NOT NULL
 );
 
--- Index the window lookup the orchestrator gate hits on every Start/Reset/Solve.
+-- Index the window lookup the orchestrator gate hits on every Start/Reset/Solve,
+-- and the overlap probe at book time.
 CREATE INDEX IF NOT EXISTS idx_slots_window ON slots (status, starts_at, ends_at);
 CREATE INDEX IF NOT EXISTS idx_slots_holder ON slots (holder_email);
+
+-- Drop the legacy grid-era uniqueness on starts_at: a UNIQUE index can't express
+-- the half-open overlap predicate (that's the app-level NOT EXISTS guard now) and
+-- would wrongly block re-booking a start that was previously booked then cancelled.
+DROP INDEX IF EXISTS uq_slots_starts_at;
 
 -- Instructor-led training sessions. The "next" one is surfaced on /booking.
 CREATE TABLE IF NOT EXISTS training_sessions (

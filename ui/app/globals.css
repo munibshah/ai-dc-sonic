@@ -15,19 +15,25 @@
 /* ============================================================
    Theme tokens
    ============================================================
-   Two themes: the original dark (`default`) and the Vesper warm-cream coaching
+   Three themes: the original dark (`default`), a clean cool `light` mode
+   derived from it (same accent family + system fonts, surfaces inverted to
+   white/slate — see its block below), and the Vesper warm-cream coaching
    palette imported from /Users/umihani/Documents/Coding/courseshelf-main/
    Vesper Design System/colors_and_type.css (see ADR-014 / lab notes for the
    rationale and the SKILL.md that defines the brand).
 
    Components consume these via two mechanisms:
      1. Direct: `bg-[var(--surface-base)]` etc. on new code paths.
-     2. Override layer (further down): when the theme switches to Vesper, we
-        rewrite the existing Tailwind utility classes (bg-black/40, text-white,
-        etc.) to read from the same vars. This lets the existing components
-        flip without a per-component refactor. The list is intentionally
-        scoped to the classes the UI actually uses today — additions go here
-        when a new class shows up in the components. */
+     2. Override layer (further down): for any non-default (light-on-cream or
+        light-on-white) theme, we rewrite the existing Tailwind utility classes
+        (bg-black/40, text-white, etc.) to read from the same vars. Those
+        remaps are scoped `:root:not([data-theme="default"])` so they serve
+        both `light` and `vesper`; the few genuinely Vesper-specific rules
+        (display fonts, rust gradients, illustrations) stay `[data-theme=
+        "vesper"]`. This lets the existing components flip without a
+        per-component refactor. The list is intentionally scoped to the
+        classes the UI actually uses today — additions go here when a new
+        class shows up in the components. */
 
 :root,
 :root[data-theme="default"] {
@@ -137,6 +143,74 @@
   --term-bg:               #1F1B16;
 }
 
+/* ------------------------------------------------------------
+   Light theme — a clean, cool light mode derived from `default`.
+   Unlike Vesper (warm cream + rust, custom display fonts) this keeps the
+   dark theme's whole identity — the sky/emerald/amber/rose/violet accent
+   family and the system font stack — and simply inverts the surfaces to
+   white/slate with dark ink. Accent hues are nudged one shade darker so
+   they hold contrast against white.
+
+   It exists because two surfaces are designed to live on a dark ground and
+   read badly on Vesper's cream: the SVG topology diagram (light node labels)
+   and the xterm terminal. Light keeps those as explicit dark islands — see
+   the `.bg-[#0b1020]` remap below, which is scoped to Vesper only so the
+   pinned dark hex survives untouched in light mode.
+   ------------------------------------------------------------ */
+:root[data-theme="light"] {
+  /* Surfaces — cool white / slate, distinct from Vesper's warm cream */
+  --surface-canvas:        #f1f5f9;            /* slate-100 page bg */
+  --surface-canvas-deep:   #ffffff;            /* header strip — white */
+  --surface-card:          #ffffff;            /* elevated card */
+  --surface-card-soft:     #f1f5f9;            /* dim card (coming-soon) */
+  --surface-chip:          rgba(15, 23, 42, 0.05);
+  --surface-chip-hover:    rgba(15, 23, 42, 0.10);
+
+  /* Hairlines */
+  --line:                  rgba(15, 23, 42, 0.10);
+  --line-strong:           rgba(15, 23, 42, 0.18);
+
+  /* Text — slate ink */
+  --text-strong:           #0f172a;            /* slate-900 */
+  --text-body:             #1e293b;            /* slate-800 */
+  --text-muted:            #475569;            /* slate-600 */
+  --text-dim:              #64748b;            /* slate-500 */
+  --text-faint:            #94a3b8;            /* slate-400 */
+
+  /* Accents — same family as default, one shade deeper for contrast on white */
+  --accent-primary:        #0284c7;   /* sky-600 — start lab */
+  --accent-primary-soft:   rgba(2, 132, 199, 0.12);
+  --accent-primary-line:   rgba(2, 132, 199, 0.35);
+  --accent-positive:       #059669;   /* emerald-600 — submit / passed */
+  --accent-positive-soft:  rgba(5, 150, 105, 0.12);
+  --accent-positive-line:  rgba(5, 150, 105, 0.35);
+  --accent-warning:        #d97706;   /* amber-600 — solve */
+  --accent-warning-soft:   rgba(217, 119, 6, 0.14);
+  --accent-warning-line:   rgba(217, 119, 6, 0.40);
+  --accent-danger:         #e11d48;   /* rose-600 — errors */
+  --accent-danger-soft:    rgba(225, 29, 72, 0.10);
+  --accent-danger-line:    rgba(225, 29, 72, 0.38);
+  --accent-brand:          #7c3aed;   /* violet-600 — brand mark + primary CTA */
+  --accent-brand-strong:   #6d28d9;   /* violet-700 — primary CTA hover */
+  --accent-brand-ink:      #ffffff;   /* text/icon on a brand-filled CTA */
+  --accent-brand-soft:     rgba(124, 58, 237, 0.10);
+  --accent-brand-line:     rgba(124, 58, 237, 0.35);
+  --accent-brand-ring:     rgba(124, 58, 237, 0.45);
+  --accent-brand-glow:     rgba(124, 58, 237, 0.30);
+
+  --focus-ring:            var(--accent-brand-ring);
+
+  /* Fonts — keep the default system stack (Vesper's display fonts are its own
+     identity; Light is just dark-inverted, not re-typeset). */
+  --font-display:          ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-body:             ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-mono:             ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-italic-accent:    Georgia, serif;
+
+  /* Terminal + topology diagram stay on a dark ground (see note above). */
+  --term-bg:               #0b1020;
+}
+
 /* ============================================================
    Base
    ============================================================ */
@@ -171,6 +245,45 @@ body {
 }
 
 .term-host { background: var(--term-bg); padding: 8px; border-radius: 6px; height: 100%; }
+
+/* ---- Dark islands (`.on-dark`) ----
+   A few surfaces are designed to stay dark in EVERY theme: the xterm terminal
+   (hardcoded black canvas), the full-screen topology picker, and the "lab
+   complete" celebration card (a deep emerald gradient). In Light mode the
+   generic remap layer would otherwise turn their text dark-on-dark.
+
+   Rather than re-pin each utility one by one, we re-declare the design tokens
+   to their dark-theme values inside `.on-dark`. CSS custom properties inherit,
+   so every token-driven remap (`.text-white { color: var(--text-strong) }`,
+   etc.) resolves to its dark appearance for descendants — light text on dark,
+   borders visible, accents bright. One block covers all three islands.
+
+   Scoped to Light only; Vesper keeps its existing behaviour. Each island
+   supplies its own solid dark background (terminal: `bg-[#0b1020]`; overlay:
+   `bg-black/85`; card: the emerald gradient) so translucent children composite
+   over dark, not over the light page. */
+:root[data-theme="light"] .on-dark {
+  --surface-canvas:        #0b1020;
+  --surface-canvas-deep:   #07091a;
+  --surface-card:          rgba(0, 0, 0, 0.4);
+  --surface-card-soft:     rgba(0, 0, 0, 0.2);
+  --surface-chip:          rgba(255, 255, 255, 0.05);
+  --surface-chip-hover:    rgba(255, 255, 255, 0.10);
+  --line:                  rgba(255, 255, 255, 0.10);
+  --line-strong:           rgba(255, 255, 255, 0.20);
+  --text-strong:           #ffffff;
+  --text-body:             #e5e7eb;
+  --text-muted:            rgba(255, 255, 255, 0.70);
+  --text-dim:              rgba(255, 255, 255, 0.60);
+  --text-faint:            rgba(255, 255, 255, 0.40);
+  --accent-primary:        #38bdf8;
+  --accent-positive:       #34d399;
+  --accent-warning:        #fbbf24;
+  --accent-danger:         #f43f5e;
+  --accent-brand:          #a855f7;
+  --term-bg:               #000000;
+  color: var(--text-body);
+}
 
 /* --- UX polish animations --- */
 
@@ -213,100 +326,115 @@ body {
 
 /* ---- Surfaces ---- */
 :root[data-theme="vesper"] .bg-\[\#0b1020\]         { background-color: var(--surface-canvas-deep); }
-:root[data-theme="vesper"] .bg-black\/40            { background-color: var(--surface-card); }
-:root[data-theme="vesper"] .bg-black\/60            { background-color: var(--surface-card); }
-:root[data-theme="vesper"] .bg-black\/30            { background-color: var(--surface-card); }
-:root[data-theme="vesper"] .bg-black\/20            { background-color: var(--surface-card-soft); }
-:root[data-theme="vesper"] .hover\:bg-black\/60:hover { background-color: var(--surface-card); }
-:root[data-theme="vesper"] .bg-white\/5             { background-color: var(--surface-chip); }
-:root[data-theme="vesper"] .bg-white\/10            { background-color: var(--surface-chip-hover); }
-:root[data-theme="vesper"] .hover\:bg-white\/10:hover { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-black\/40            { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-black\/60            { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-black\/30            { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-black\/20            { background-color: var(--surface-card-soft); }
+:root:not([data-theme="default"]) .hover\:bg-black\/60:hover { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-white\/5             { background-color: var(--surface-chip); }
+:root:not([data-theme="default"]) .bg-white\/8             { background-color: var(--surface-chip); }
+:root:not([data-theme="default"]) .bg-white\/10            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/12            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/15            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/20            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/25            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/40            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .hover\:bg-white\/10:hover { background-color: var(--surface-chip-hover); }
 
 /* Tinted utility bgs — flatten to soft accent washes */
-:root[data-theme="vesper"] .bg-sky-500\/10          { background-color: var(--accent-primary-soft); }
-:root[data-theme="vesper"] .bg-sky-500\/15          { background-color: var(--accent-primary-soft); }
-:root[data-theme="vesper"] .bg-sky-500\/20          { background-color: var(--accent-primary-soft); }
-:root[data-theme="vesper"] .bg-sky-500\/30          { background-color: var(--accent-primary-soft); }
-:root[data-theme="vesper"] .hover\:bg-sky-500\/30:hover { background-color: var(--accent-primary-soft); }
-:root[data-theme="vesper"] .bg-sky-400\/15          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-500\/10          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-500\/15          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-500\/20          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-500\/30          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .hover\:bg-sky-500\/30:hover { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-400\/15          { background-color: var(--accent-primary-soft); }
 
-:root[data-theme="vesper"] .bg-emerald-500\/10      { background-color: var(--accent-positive-soft); }
-:root[data-theme="vesper"] .bg-emerald-500\/15      { background-color: var(--accent-positive-soft); }
-:root[data-theme="vesper"] .bg-emerald-500\/20      { background-color: var(--accent-positive-soft); }
-:root[data-theme="vesper"] .bg-emerald-500\/30      { background-color: var(--accent-positive-soft); }
-:root[data-theme="vesper"] .hover\:bg-emerald-500\/30:hover { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .bg-emerald-500\/10      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .bg-emerald-500\/15      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .bg-emerald-500\/20      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .bg-emerald-500\/30      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .hover\:bg-emerald-500\/30:hover { background-color: var(--accent-positive-soft); }
 
-:root[data-theme="vesper"] .bg-amber-500\/10        { background-color: var(--accent-warning-soft); }
-:root[data-theme="vesper"] .bg-amber-500\/15        { background-color: var(--accent-warning-soft); }
-:root[data-theme="vesper"] .bg-amber-500\/20        { background-color: var(--accent-warning-soft); }
-:root[data-theme="vesper"] .hover\:bg-amber-500\/20:hover { background-color: var(--accent-warning-soft); }
+:root:not([data-theme="default"]) .bg-amber-500\/10        { background-color: var(--accent-warning-soft); }
+:root:not([data-theme="default"]) .bg-amber-500\/15        { background-color: var(--accent-warning-soft); }
+:root:not([data-theme="default"]) .bg-amber-500\/20        { background-color: var(--accent-warning-soft); }
+:root:not([data-theme="default"]) .hover\:bg-amber-500\/20:hover { background-color: var(--accent-warning-soft); }
 
-:root[data-theme="vesper"] .bg-rose-500\/10         { background-color: var(--accent-danger-soft); }
-:root[data-theme="vesper"] .bg-rose-500\/15         { background-color: var(--accent-danger-soft); }
+:root:not([data-theme="default"]) .bg-rose-500\/10         { background-color: var(--accent-danger-soft); }
+:root:not([data-theme="default"]) .bg-rose-500\/15         { background-color: var(--accent-danger-soft); }
 
-:root[data-theme="vesper"] .bg-violet-500\/15       { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-violet-500\/15       { background-color: var(--accent-primary-soft); }
 
 /* ---- Hairlines ---- */
-:root[data-theme="vesper"] .border-white\/10        { border-color: var(--line); }
-:root[data-theme="vesper"] .border-white\/15        { border-color: var(--line); }
-:root[data-theme="vesper"] .border-white\/20        { border-color: var(--line-strong); }
-:root[data-theme="vesper"] .hover\:border-white\/30:hover { border-color: var(--line-strong); }
+:root:not([data-theme="default"]) .border-white\/10        { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-white\/12        { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-white\/15        { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-white\/20        { border-color: var(--line-strong); }
+:root:not([data-theme="default"]) .hover\:border-white\/30:hover { border-color: var(--line-strong); }
 
-:root[data-theme="vesper"] .border-sky-400\/30      { border-color: var(--accent-primary-line); }
-:root[data-theme="vesper"] .border-sky-400\/40      { border-color: var(--accent-primary-line); }
-:root[data-theme="vesper"] .border-sky-400\/50      { border-color: var(--accent-primary-line); }
-:root[data-theme="vesper"] .border-sky-400\/60      { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-sky-400\/30      { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-sky-400\/40      { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-sky-400\/50      { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-sky-400\/60      { border-color: var(--accent-primary-line); }
 
-:root[data-theme="vesper"] .border-emerald-400\/30  { border-color: var(--accent-positive-line); }
-:root[data-theme="vesper"] .border-emerald-400\/40  { border-color: var(--accent-positive-line); }
-:root[data-theme="vesper"] .border-emerald-400\/50  { border-color: var(--accent-positive-line); }
-:root[data-theme="vesper"] .border-emerald-400\/60  { border-color: var(--accent-positive-line); }
-:root[data-theme="vesper"] .border-emerald-500\/40  { border-color: var(--accent-positive-line); }
-:root[data-theme="vesper"] .hover\:border-emerald-400\/50:hover { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-400\/30  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-400\/40  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-400\/50  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-400\/60  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-500\/40  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .hover\:border-emerald-400\/50:hover { border-color: var(--accent-positive-line); }
 
-:root[data-theme="vesper"] .border-amber-400\/30    { border-color: var(--accent-warning-line); }
-:root[data-theme="vesper"] .border-amber-400\/40    { border-color: var(--accent-warning-line); }
-:root[data-theme="vesper"] .border-amber-400\/50    { border-color: var(--accent-warning-line); }
+:root:not([data-theme="default"]) .border-amber-400\/30    { border-color: var(--accent-warning-line); }
+:root:not([data-theme="default"]) .border-amber-400\/40    { border-color: var(--accent-warning-line); }
+:root:not([data-theme="default"]) .border-amber-400\/50    { border-color: var(--accent-warning-line); }
 
-:root[data-theme="vesper"] .border-rose-400\/30     { border-color: var(--accent-danger-line); }
-:root[data-theme="vesper"] .border-rose-400\/40     { border-color: var(--accent-danger-line); }
-:root[data-theme="vesper"] .border-rose-500\/40     { border-color: var(--accent-danger-line); }
+:root:not([data-theme="default"]) .border-rose-400\/30     { border-color: var(--accent-danger-line); }
+:root:not([data-theme="default"]) .border-rose-400\/40     { border-color: var(--accent-danger-line); }
+:root:not([data-theme="default"]) .border-rose-500\/40     { border-color: var(--accent-danger-line); }
 
-:root[data-theme="vesper"] .border-violet-400\/50   { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-violet-400\/50   { border-color: var(--accent-primary-line); }
 
-:root[data-theme="vesper"] .border-purple-500\/20   { border-color: var(--line); }
-:root[data-theme="vesper"] .border-purple-400\/30   { border-color: var(--accent-primary-line); }
-:root[data-theme="vesper"] .border-purple-400\/60   { border-color: var(--accent-primary-line); }
-:root[data-theme="vesper"] .ring-purple-400\/30    { --tw-ring-color: var(--accent-primary-line); }
-:root[data-theme="vesper"] .group:hover .group-hover\:ring-purple-400\/60 { --tw-ring-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-purple-500\/20   { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-purple-400\/30   { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-purple-400\/60   { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .ring-purple-400\/30    { --tw-ring-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .group:hover .group-hover\:ring-purple-400\/60 { --tw-ring-color: var(--accent-primary-line); }
 
 /* ---- Text ---- */
-:root[data-theme="vesper"] .text-white              { color: var(--text-strong); }
-:root[data-theme="vesper"] .text-white\/40          { color: var(--text-faint); }
-:root[data-theme="vesper"] .text-white\/60          { color: var(--text-dim); }
-:root[data-theme="vesper"] .text-white\/70          { color: var(--text-muted); }
-:root[data-theme="vesper"] .text-white\/80          { color: var(--text-body); }
-:root[data-theme="vesper"] .hover\:text-white:hover { color: var(--text-strong); }
-:root[data-theme="vesper"] .text-purple-300\/80     { color: var(--text-muted); }
-:root[data-theme="vesper"] .text-purple-300         { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-white              { color: var(--text-strong); }
+:root:not([data-theme="default"]) .text-white\/90          { color: var(--text-strong); }
+:root:not([data-theme="default"]) .text-white\/85          { color: var(--text-body); }
+:root:not([data-theme="default"]) .text-white\/80          { color: var(--text-body); }
+:root:not([data-theme="default"]) .text-white\/70          { color: var(--text-muted); }
+:root:not([data-theme="default"]) .text-white\/65          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/60          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/55          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/50          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/45          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .text-white\/40          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .text-white\/30          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .text-white\/25          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .hover\:text-white:hover { color: var(--text-strong); }
+:root:not([data-theme="default"]) .text-purple-300\/80     { color: var(--text-muted); }
+:root:not([data-theme="default"]) .text-purple-300         { color: var(--accent-primary); }
 
-:root[data-theme="vesper"] .text-sky-100            { color: var(--accent-primary); }
-:root[data-theme="vesper"] .text-sky-200            { color: var(--accent-primary); }
-:root[data-theme="vesper"] .text-sky-300            { color: var(--accent-primary); }
-:root[data-theme="vesper"] .text-emerald-100        { color: var(--accent-positive); }
-:root[data-theme="vesper"] .text-emerald-200        { color: var(--accent-positive); }
-:root[data-theme="vesper"] .text-emerald-300        { color: var(--accent-positive); }
-:root[data-theme="vesper"] .text-emerald-400        { color: var(--accent-positive); }
-:root[data-theme="vesper"] .text-emerald-400\/70    { color: var(--accent-positive); }
-:root[data-theme="vesper"] .group:hover .group-hover\:text-emerald-200 { color: var(--accent-positive); }
-:root[data-theme="vesper"] .text-amber-200          { color: var(--accent-warning); }
-:root[data-theme="vesper"] .text-amber-300          { color: var(--accent-warning); }
-:root[data-theme="vesper"] .text-rose-100           { color: var(--accent-danger); }
-:root[data-theme="vesper"] .text-rose-200           { color: var(--accent-danger); }
-:root[data-theme="vesper"] .text-violet-200         { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-sky-100            { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-sky-200            { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-sky-300            { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-emerald-100        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-200        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-300        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-400        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-400\/70    { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .group:hover .group-hover\:text-emerald-200 { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-amber-200          { color: var(--accent-warning); }
+:root:not([data-theme="default"]) .text-amber-300          { color: var(--accent-warning); }
+:root:not([data-theme="default"]) .text-rose-100           { color: var(--accent-danger); }
+:root:not([data-theme="default"]) .text-rose-200           { color: var(--accent-danger); }
+:root:not([data-theme="default"]) .text-violet-200         { color: var(--accent-primary); }
 
 /* ---- Shadows / glows ---- */
-:root[data-theme="vesper"] .shadow-\[0_0_40px_rgba\(168\,85\,247\,0\.25\)\] {
+:root:not([data-theme="default"]) .shadow-\[0_0_40px_rgba\(168\,85\,247\,0\.25\)\] {
   box-shadow: 0 1px 0 rgba(31,27,22,0.04), 0 16px 40px -20px rgba(31,27,22,0.25);
 }
 
@@ -321,10 +449,19 @@ body {
 :root[data-theme="vesper"] .bg-\[radial-gradient\(ellipse_at_right\,_rgba\(168\,85\,247\,0\.55\)\,_transparent_60\%\)\] {
   background-image: radial-gradient(ellipse at right, rgba(199, 91, 60, 0.18), transparent 60%) !important;
 }
+/* Light keeps the violet accent family — flat white surface with a soft
+   violet wash, so the hero reads as the same brand on a bright ground. */
+:root[data-theme="light"] .bg-gradient-to-br {
+  background-image: none !important;
+  background-color: var(--surface-card);
+}
+:root[data-theme="light"] .bg-\[radial-gradient\(ellipse_at_right\,_rgba\(168\,85\,247\,0\.55\)\,_transparent_60\%\)\] {
+  background-image: radial-gradient(ellipse at right, rgba(124, 58, 237, 0.12), transparent 60%) !important;
+}
 
 /* ---- Code blocks & inline mono — read better against cream ---- */
-:root[data-theme="vesper"] code,
-:root[data-theme="vesper"] pre {
+:root:not([data-theme="default"]) code,
+:root:not([data-theme="default"]) pre {
   background-color: var(--surface-card-soft);
   color: var(--text-strong);
 }
@@ -336,8 +473,8 @@ body {
    the toggle flips — no flash, no React state, no SSR/hydration dance. */
 .theme-logo-dark  { display: block; }
 .theme-logo-light { display: none; }
-:root[data-theme="vesper"] .theme-logo-dark  { display: none; }
-:root[data-theme="vesper"] .theme-logo-light { display: block; }
+:root:not([data-theme="default"]) .theme-logo-dark  { display: none; }
+:root:not([data-theme="default"]) .theme-logo-light { display: block; }
 
 /* ---- Vesper-only elements ----
    Used for the illustrations on each lab card. They're designed on a cream

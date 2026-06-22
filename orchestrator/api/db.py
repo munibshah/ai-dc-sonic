@@ -183,6 +183,32 @@ def start_lab_run(session_id: str, lab_id: str) -> dict[str, Any]:
     return get_lab_run(session_id, lab_id)
 
 
+def begin_lab_run(session_id: str, lab_id: str) -> dict[str, Any]:
+    """Mark a lab in progress WITHOUT bootstrapping the fabric.
+
+    Used for auto-advance: because the labs build on each other (Lab N's end
+    state == Lab N+1's start state), continuing to the next lab just carries the
+    fabric forward — no reset, no config push. Idempotent and non-destructive:
+    creates an `in_progress` row only if none exists; if the lab already has a
+    row (in_progress or passed), it's left untouched (never downgrades a pass,
+    never bumps attempts, never wipes a summary)."""
+    c = conn()
+    with _lock:
+        existing = c.execute(
+            "SELECT 1 FROM lab_runs WHERE session_id = ? AND lab_id = ?",
+            (session_id, lab_id),
+        ).fetchone()
+        if existing is None:
+            c.execute(
+                """
+                INSERT INTO lab_runs (session_id, lab_id, state, started_at, attempts, used_solve, last_summary)
+                VALUES (?, ?, 'in_progress', ?, 1, 0, NULL)
+                """,
+                (session_id, lab_id, _now()),
+            )
+    return get_lab_run(session_id, lab_id)
+
+
 def mark_used_solve(session_id: str, lab_id: str) -> dict[str, Any]:
     c = conn()
     with _lock:

@@ -1,13 +1,13 @@
-import BookingPanel from "@/components/BookingPanel";
+import LabLauncher from "@/components/LabLauncher";
 
 export const metadata = {
-  title: "Your dashboard — AIDC Labs",
+  title: "Your launcher — AIDC Labs",
 };
 
-export default function AppDashboardPage() {
+export default function LauncherPage() {
   return (
     <div className="mx-auto max-w-4xl">
-      <BookingPanel />
+      <LabLauncher />
     </div>
   );
 }

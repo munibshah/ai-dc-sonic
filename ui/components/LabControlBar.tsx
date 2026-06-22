@@ -10,17 +10,12 @@ export type LabAction = "start" | "reset" | "solve" | "submit";
 interface Props {
   lab: Lab;
   run: LabRun | null;
-  devicesUp?: number;
-  devicesTotal?: number;
   /** Which action is currently in-flight, if any. Drives the spinner + active label. */
   busy: LabAction | null;
   onStart: () => void;
   onReset: () => void;
-  onSolve: () => void;
   onSubmit: () => void;
   onOpenTopology: () => void;
-  onToggleSolution: () => void;
-  solutionOpen: boolean;
   /** Collapses the guide pane so the terminal can go full-width. */
   onToggleFocus: () => void;
   focusTerminal: boolean;
@@ -29,26 +24,24 @@ interface Props {
   focusTelemetry?: boolean;
   /** Whether the workbench is rendering a telemetry pane at all. */
   showTelemetryToggle?: boolean;
+  /** Lab 1 boots the bare fabric ("Start lab"); later labs carry forward ("Begin lab"). */
+  isFirstLab?: boolean;
 }
 
 export default function LabControlBar({
   lab,
   run,
-  devicesUp,
-  devicesTotal,
   busy,
   onStart,
   onReset,
-  onSolve,
   onSubmit,
   onOpenTopology,
-  onToggleSolution,
-  solutionOpen,
   onToggleFocus,
   focusTerminal,
   onToggleTelemetryFocus,
   focusTelemetry,
   showTelemetryToggle,
+  isFirstLab = true,
 }: Props) {
   const state = run?.state ?? "not_started";
   const anyBusy = busy !== null;
@@ -56,28 +49,15 @@ export default function LabControlBar({
   return (
     <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
       <div className="flex items-center gap-3 flex-wrap">
-        <Link href="/" className="inline-flex items-center gap-1.5 text-white/60 hover:text-white text-sm transition-colors">
-          <ArrowLeft className="w-3.5 h-3.5" /> labs
+        <Link href="/portal" className="inline-flex items-center gap-1.5 text-white/60 hover:text-white text-sm transition-colors">
+          <ArrowLeft className="w-3.5 h-3.5" /> My labs
         </Link>
         <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/60 bg-white/5">
           Lab {lab.id}
         </span>
         <h1 className="text-xl font-semibold text-white">{lab.title}</h1>
 
-        <StatePill state={state} run={run} />
-
-        {devicesTotal !== undefined && (
-          <span
-            className={`text-xs px-2 py-0.5 rounded ${
-              devicesUp === devicesTotal
-                ? "bg-emerald-500/20 text-emerald-300"
-                : "bg-amber-500/20 text-amber-300"
-            }`}
-            title="containers running"
-          >
-            {devicesUp ?? 0}/{devicesTotal} up
-          </span>
-        )}
+        <StatePill state={state} />
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -86,16 +66,6 @@ export default function LabControlBar({
           className="px-3 py-1.5 rounded border border-white/20 bg-white/5 hover:bg-white/10 text-sm"
         >
           Topology
-        </button>
-        <button
-          onClick={onToggleSolution}
-          className={`px-3 py-1.5 rounded border text-sm ${
-            solutionOpen
-              ? "border-amber-400/50 bg-amber-500/15 text-amber-200"
-              : "border-white/20 bg-white/5 hover:bg-white/10"
-          }`}
-        >
-          {solutionOpen ? "Hide solution" : "Reveal solution"}
         </button>
         <button
           onClick={onToggleFocus}
@@ -135,22 +105,10 @@ export default function LabControlBar({
             onClick={onReset}
             disabled={anyBusy}
             active={busy === "reset"}
-            idleLabel="Reset"
+            idleLabel="Reset to start"
             activeLabel="Resetting…"
-            title="Wipe fabric back to exercise state"
+            title={`Re-apply Lab ${lab.id}'s starting configuration so you can build it from scratch`}
             variant="ghost"
-          />
-        )}
-
-        {state !== "not_started" && (
-          <ActionButton
-            onClick={onSolve}
-            disabled={anyBusy}
-            active={busy === "solve"}
-            idleLabel="Solve"
-            activeLabel="Solving…"
-            title="Apply the canonical configuration to all switches"
-            variant="amber"
           />
         )}
 
@@ -160,8 +118,8 @@ export default function LabControlBar({
             disabled={anyBusy}
             active={busy === "start"}
             icon={<Bolt className="w-3.5 h-3.5" />}
-            idleLabel="Start lab"
-            activeLabel="Starting lab…"
+            idleLabel={isFirstLab ? "Start lab" : "Begin lab"}
+            activeLabel={isFirstLab ? "Starting lab…" : "Starting…"}
             variant="sky-primary"
           />
         ) : (
@@ -236,7 +194,7 @@ function Spinner() {
   );
 }
 
-function StatePill({ state, run }: { state: LabRun["state"] | "not_started"; run: LabRun | null }) {
+function StatePill({ state }: { state: LabRun["state"] | "not_started" }) {
   // Re-apply the flash animation on every state change. We mount a div with
   // a key tied to the state so React remounts it and the CSS animation re-runs.
   const [flashKey, setFlashKey] = useState(0);
@@ -262,15 +220,13 @@ function StatePill({ state, run }: { state: LabRun["state"] | "not_started"; run
     inner = (
       <>
         <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" /> In progress
-        {run?.attempts ? <span className="opacity-60">· attempt {run.attempts}</span> : null}
       </>
     );
   } else {
     colors = "bg-emerald-500/20 text-emerald-200";
     inner = (
       <>
-        <Check className="w-3 h-3" /> Passed
-        {run?.used_solve ? <span className="opacity-70">(solved)</span> : null}
+        <Check className="w-3 h-3" /> Complete
       </>
     );
   }

@@ -58,7 +58,7 @@ export default function TopologyPage() {
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_18rem] gap-3">
-        <div className="rounded-lg border border-white/10 bg-black/40 p-2 overflow-hidden">
+        <div className="rounded-lg border border-white/10 bg-[#0b1020] p-2 overflow-hidden">
           <TopologyDiagram
             devices={devices}
             onNodeClick={(name) => router.push(`/portal/console/${name}`)}

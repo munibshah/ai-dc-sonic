@@ -143,6 +143,37 @@ export function startLab(labId: string): Promise<LabRun> {
   return postJson<LabRun>(`/api/labs/${labId}/start`);
 }
 
+// startLab applies the lab's BOOTSTRAP_STATE (re-lays the starting config).
+// Semantic alias for the "Reset config to this lab's starting point" action.
+export const resetToStart = startLab;
+
+// Enter a lab WITHOUT bootstrapping — auto-advance carries the fabric forward
+// from the lab you just cleared (labs build on each other). See /begin.
+export function beginLab(labId: string): Promise<LabRun> {
+  return postJson<LabRun>(`/api/labs/${labId}/begin`);
+}
+
+// ---- journey progress -------------------------------------------------------
+export interface LabProgress {
+  id: string;
+  title: string;
+  state: LabRunState;
+  unlocked: boolean;
+  passed: boolean;
+}
+
+export interface Progress {
+  labs: LabProgress[];
+  /** The lab to resume at: first unlocked, not-yet-passed lab (last once all cleared). */
+  current: string | null;
+}
+
+export async function fetchProgress(): Promise<Progress> {
+  const r = await fetch(`${API_BASE}/api/progress`, FETCH_OPTS);
+  if (!r.ok) throw new Error(`progress fetch failed: ${r.status}`);
+  return r.json();
+}
+
 export function resetLab(labId: string): Promise<LabRun> {
   return postJson<LabRun>(`/api/labs/${labId}/reset`);
 }
@@ -218,4 +249,41 @@ export function submitLabStream(labId: string, cb: SubmitStreamCallbacks): () =>
   });
 
   return close;
+}
+
+// ---- session end / expiry reset (SSE) ---------------------------------------
+// Wipes the shared fabric back to Lab 1's bare starting state when a booking
+// session ends or its timer lapses, so the next learner starts clean.
+export interface ResetProgressEvent {
+  label: string;
+  switch: string | null;
+  done: number;
+  total: number;
+}
+
+export interface EndSessionCallbacks {
+  onProgress: (e: ResetProgressEvent) => void;
+  onDone: () => void;
+  onError: (message: string) => void;
+}
+
+/** Stream the fabric reset (per-switch progress). Returns a cancel fn. */
+export function endSessionStream(cb: EndSessionCallbacks): () => void {
+  const es = new EventSource(`${API_BASE}/api/session/end/stream`, { withCredentials: true });
+  const close = () => {
+    try { es.close(); } catch { /* ignore */ }
+  };
+  es.addEventListener("progress", (ev: MessageEvent) => {
+    try { cb.onProgress(JSON.parse(ev.data) as ResetProgressEvent); } catch (e) { cb.onError(String(e)); close(); }
+  });
+  es.addEventListener("done", () => { cb.onDone(); close(); });
+  es.addEventListener("error", () => {
+    if (es.readyState === EventSource.CLOSED) cb.onError("connection to orchestrator was lost");
+  });
+  return close;
+}
+
+/** Non-streaming fabric reset (fallback / no progress UI). */
+export function endSession(): Promise<{ ok: boolean }> {
+  return postJson<{ ok: boolean }>("/api/session/end");
 }

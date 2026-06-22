@@ -46,7 +46,7 @@ const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function Tabbed
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="on-dark bg-[#0b1020] flex flex-col h-full min-h-0">
       <div className="flex items-stretch border-b border-white/10 bg-black/40 overflow-x-auto">
         {tabs.map((name) => {
           const isActive = name === active;

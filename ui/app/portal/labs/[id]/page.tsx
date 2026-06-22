@@ -9,10 +9,11 @@ import {
   Lab,
   LabRun,
   SubmitResult,
+  beginLab,
   fetchDevices,
   fetchLab,
+  fetchProgress,
   resetLab,
-  solveLab,
   startLab,
   submitLabStream,
 } from "@/lib/api";
@@ -20,16 +21,18 @@ import { useLabRun } from "@/lib/hooks";
 import { useToasts } from "@/components/Toast";
 import GuidePane from "@/components/GuidePane";
 import LabControlBar, { LabAction } from "@/components/LabControlBar";
+import { ArrowRight, Lock } from "@/components/icons";
 import CheckResultsCard from "@/components/CheckResultsCard";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import PassedScreen from "@/components/PassedScreen";
 import StatusBanner from "@/components/StatusBanner";
 import FabricHoldBanner from "@/components/FabricHoldBanner";
+import FabricExpiryWatcher from "@/components/FabricExpiryWatcher";
 import TabbedTerminals, { TabbedTerminalsHandle } from "@/components/TabbedTerminals";
 import TelemetryPane from "@/components/TelemetryPane";
 import TopologyOverlay from "@/components/TopologyOverlay";
 
-type ConfirmKind = "reset" | "solve" | null;
+type ConfirmKind = "reset" | null;
 
 const STATUS_MESSAGES: Record<LabAction, string> = {
   start: "Resetting the fabric to this lab's starting state… (~10s)",
@@ -45,9 +48,10 @@ export default function LabWorkbenchPage() {
 
   const [lab, setLab] = useState<Lab | null>(null);
   const [labError, setLabError] = useState<string | null>(null);
+  const [unlocked, setUnlocked] = useState<boolean | null>(null); // null until known
+  const [prevLabId, setPrevLabId] = useState<string | null>(null);
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [topoOpen, setTopoOpen] = useState(false);
-  const [solutionOpen, setSolutionOpen] = useState(false);
   const [focusTerminal, setFocusTerminal] = useState(false);
   const [focusTelemetry, setFocusTelemetry] = useState(false);
   const [busy, setBusy] = useState<LabAction | null>(null);
@@ -65,10 +69,24 @@ export default function LabWorkbenchPage() {
     fetchLab(labId)
       .then((l) => alive && setLab(l))
       .catch((e) => alive && setLabError(String(e)));
+    // Journey gating: is this lab unlocked for the learner yet?
+    fetchProgress()
+      .then((p) => {
+        if (!alive) return;
+        const me = p.labs.find((l) => l.id === labId);
+        setUnlocked(me ? me.unlocked : true); // unknown lab → don't block
+        const idx = p.labs.findIndex((l) => l.id === labId);
+        setPrevLabId(idx > 0 ? p.labs[idx - 1].id : null);
+      })
+      .catch(() => alive && setUnlocked(true)); // progress unavailable → fail open
     return () => {
       alive = false;
     };
   }, [labId]);
+
+  // First lab boots the bare fabric; later labs carry the fabric forward (no
+  // bootstrap) because the labs build on each other.
+  const isFirstLab = !!lab && !lab.previous_lab_id;
 
   useEffect(() => {
     let alive = true;
@@ -123,16 +141,20 @@ export default function LabWorkbenchPage() {
   }
 
   function onStart() {
+    // Lab 1 bootstraps the bare fabric; later labs just begin (no bootstrap) —
+    // the fabric carries forward from the lab you just cleared.
     runAction(
       "start",
-      () => startLab(labId),
+      () => (isFirstLab ? startLab(labId) : beginLab(labId)),
       (r) => {
         setRun(r);
         setPendingSubmit(null);
         toasts.push({
           tone: "success",
-          title: "Lab started",
-          body: "Fabric reset to this lab's starting state — open Topology to pick a device.",
+          title: isFirstLab ? "Lab started" : "Lab ready",
+          body: isFirstLab
+            ? "Fabric set to the starting state — open Topology to pick a device."
+            : "Continuing from where the last lab left off — your devices and config carry forward.",
         });
         fetchDevices().then(setDevices).catch(() => {});
       },
@@ -150,29 +172,11 @@ export default function LabWorkbenchPage() {
         toasts.push({
           tone: "success",
           title: "Reset complete",
-          body: `Fabric back to lab starting state — attempt ${r.attempts}.`,
+          body: "Fabric re-applied to this lab's starting configuration.",
         });
         fetchDevices().then(setDevices).catch(() => {});
       },
       "Reset failed",
-    );
-    setConfirm(null);
-  }
-
-  function onSolve() {
-    runAction(
-      "solve",
-      () => solveLab(labId),
-      (r) => {
-        setRun(r);
-        toasts.push({
-          tone: "success",
-          title: "Canonical configuration applied",
-          body: "Click Submit to verify and stamp the lab complete.",
-        });
-        fetchDevices().then(setDevices).catch(() => {});
-      },
-      "Solve failed",
     );
     setConfirm(null);
   }
@@ -251,7 +255,7 @@ export default function LabWorkbenchPage() {
       <div className="p-6 rounded border border-rose-500/40 bg-rose-500/10 text-rose-200">
         Lab not found: {labError}
         <div className="mt-2 text-sm">
-          <Link href="/" className="underline">← back to labs</Link>
+          <Link href="/portal" className="underline">← back to My labs</Link>
         </div>
       </div>
     );
@@ -261,8 +265,10 @@ export default function LabWorkbenchPage() {
     return <ComingSoonLab lab={lab} />;
   }
 
-  const upCount = devices?.filter((d) => d.running).length;
-  const totalCount = devices?.length;
+  if (unlocked === false) {
+    return <LockedLab lab={lab} prevLabId={prevLabId} />;
+  }
+
   const lastSummary = pendingSubmit ?? run?.last_summary ?? null;
 
   // Telemetry pane is opt-in per lab (Lab 4+). When present, the workbench
@@ -284,19 +290,15 @@ export default function LabWorkbenchPage() {
 
   return (
     <div className="mx-auto max-w-[1800px] flex flex-col h-[calc(100vh-7.5rem)]">
+      <FabricExpiryWatcher />
       <LabControlBar
         lab={lab}
         run={run}
-        devicesUp={upCount}
-        devicesTotal={totalCount}
         busy={busy}
         onStart={onStart}
         onReset={() => setConfirm("reset")}
-        onSolve={() => setConfirm("solve")}
         onSubmit={onSubmit}
         onOpenTopology={() => setTopoOpen(true)}
-        onToggleSolution={() => setSolutionOpen((o) => !o)}
-        solutionOpen={solutionOpen}
         onToggleFocus={() => {
           setFocusTerminal((f) => !f);
           setFocusTelemetry(false);
@@ -308,6 +310,7 @@ export default function LabWorkbenchPage() {
           setFocusTelemetry((f) => !f);
           setFocusTerminal(false);
         }}
+        isFirstLab={isFirstLab}
       />
 
       <StatusBanner message={busy ? STATUS_MESSAGES[busy] : null} />
@@ -319,7 +322,7 @@ export default function LabWorkbenchPage() {
       <div className="flex flex-col lg:flex-row gap-3 flex-1 min-h-0">
         {guideVisible && (
           <section className={`${guideBasis} lg:grow lg:shrink min-h-0 rounded-lg border border-white/10 bg-black/30 overflow-y-auto flex flex-col`}>
-            <GuidePane labId={lab.id} part={solutionOpen ? "solution" : "exercise"} />
+            <GuidePane labId={lab.id} part="exercise" />
             {lastSummary && <CheckResultsCard result={lastSummary} />}
           </section>
         )}
@@ -359,36 +362,19 @@ export default function LabWorkbenchPage() {
 
       <ConfirmDialog
         open={confirm === "reset"}
-        title="Reset the fabric?"
+        title={`Reset to Lab ${lab.id}'s starting point?`}
         body={
           <>
-            The orchestrator will roll the fabric back to this lab's starting state — every switch and worker is
-            reconfigured to the lab's baseline. Your in-flight work is replaced; your console history stays open.
-            Takes about 10 seconds.
+            The orchestrator will re-apply <strong>Lab {lab.id}</strong>&apos;s starting configuration to every
+            switch and worker, so you can build this lab from scratch. Any current fabric state is replaced; your
+            console history stays open. Takes about 10 seconds. (Your cleared-lab progress is unaffected.)
           </>
         }
-        confirmLabel="Reset"
+        confirmLabel="Reset to starting point"
         danger
         busy={busy === "reset"}
-        busyBody="Resetting the fabric to this lab's starting state."
+        busyBody={`Re-applying Lab ${lab.id}'s starting configuration.`}
         onConfirm={onReset}
-        onCancel={() => setConfirm(null)}
-      />
-
-      <ConfirmDialog
-        open={confirm === "solve"}
-        title="Apply the canonical configuration?"
-        body={
-          <>
-            The orchestrator will load this lab's canonical configuration onto every switch (and any workers the
-            lab touches), then reload. Your in-progress work is replaced. Your run will be flagged <em>solved</em>
-            on the completion screen.
-          </>
-        }
-        confirmLabel="Solve"
-        busy={busy === "solve"}
-        busyBody="Applying this lab's canonical configuration to the fabric."
-        onConfirm={onSolve}
         onCancel={() => setConfirm(null)}
       />
     </div>
@@ -409,6 +395,30 @@ function pendingSummary(
   return count;
 }
 
+function LockedLab({ lab, prevLabId }: { lab: Lab; prevLabId: string | null }) {
+  const prev = prevLabId ?? String(Math.max(1, Number(lab.id) - 1));
+  return (
+    <div className="max-w-2xl mx-auto mt-12 p-8 rounded-2xl border border-white/10 bg-black/30 text-center">
+      <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-white/5 border border-white/15 text-white/50 mb-4">
+        <Lock className="w-6 h-6" />
+      </div>
+      <h1 className="text-3xl font-semibold text-white mb-2">Lab {lab.id} is locked</h1>
+      <p className="text-white/70 leading-relaxed">
+        The labs are a guided journey — clear <strong>Lab {prev}</strong> first and Lab {lab.id} unlocks
+        automatically.
+      </p>
+      <div className="mt-6 flex flex-wrap gap-3 justify-center">
+        <Link href={`/portal/labs/${prev}`} className="btn btn-primary">
+          Go to Lab {prev} <ArrowRight className="w-4 h-4" />
+        </Link>
+        <Link href="/portal" className="btn btn-secondary">
+          Back to dashboard
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 function ComingSoonLab({ lab }: { lab: Lab }) {
   return (
     <div className="max-w-2xl mx-auto mt-12 p-8 rounded-2xl border border-white/10 bg-black/30 text-center">
@@ -419,8 +429,8 @@ function ComingSoonLab({ lab }: { lab: Lab }) {
         <p className="text-white/40 text-sm mt-2">Expected duration: {lab.duration_min} min.</p>
       )}
       <div className="mt-6 text-sm">
-        <Link href="/" className="text-sky-300 hover:text-sky-200 underline">
-          ← back to all labs
+        <Link href="/portal" className="text-sky-300 hover:text-sky-200 underline">
+          ← back to My labs
         </Link>
       </div>
     </div>

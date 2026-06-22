@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Iterator, TypedDict
 
@@ -120,10 +120,14 @@ def _bootstrap_one(switch: str) -> tuple[str, int, str]:
     return switch, rc, out
 
 
-def _apply_configs(source_dir_name: str) -> None:
-    """Sync each switch's frr.conf (and optional overlay-setup.sh) from
-    configs/frr/<source>/<sw>/ into the live configs/frr/<sw>/, then re-run
-    bootstrap-switch.sh in every switch container in parallel.
+def _stage_configs(source_dir_name: str) -> None:
+    """Write each switch's frr.conf (and optional overlay-setup.sh) from
+    configs/frr/<source>/<sw>/ into the live configs/frr/<sw>/, in place.
+
+    This is the file-staging half of a bootstrap; it does NOT re-run
+    bootstrap-switch.sh. Callers either follow with the parallel bootstrap
+    loop (see _apply_configs) or drive the switches themselves to surface
+    per-switch progress (see iter_reset_to_baseline).
 
     The optional overlay-setup.sh is what brings up Lab 2's bridge + VXLAN
     device on each leaf. When a source dir has no overlay-setup.sh for a
@@ -156,6 +160,12 @@ def _apply_configs(source_dir_name: str) -> None:
                 # No overlay in this state — empty stub so bootstrap tears down.
                 with open(ov_dst, "r+b") as f:
                     f.truncate(0)
+
+
+def _apply_configs(source_dir_name: str) -> None:
+    """Stage each switch's config (see _stage_configs) then re-run
+    bootstrap-switch.sh in every switch container in parallel."""
+    _stage_configs(source_dir_name)
     with ThreadPoolExecutor(max_workers=len(SWITCHES)) as pool:
         list(pool.map(_bootstrap_one, SWITCHES))
 
@@ -218,6 +228,47 @@ def bootstrap_lab(lab_id: str) -> None:
         pre_extra()
     _apply_configs(state)
     _reset_workers_to_underlay()
+    extra = getattr(mod, "bootstrap_extra", None)
+    if callable(extra):
+        extra()
+
+
+def iter_reset_to_baseline() -> Iterator[dict]:
+    """Reset the fabric to Lab 1's bootstrap state (`_skeleton`), yielding a
+    progress dict per step so the UI can show a live reset.
+
+    This is the "wipe back to the very beginning" used when a booking session
+    ends or its timer expires: the next learner inherits a clean bare fabric,
+    exactly as if they'd just clicked Start on Lab 1. Functionally equivalent
+    to `bootstrap_lab("1")`, but it drives the switches itself (with
+    as_completed) instead of fire-and-forget so each switch reports as it lands.
+
+    Yields: {"label": str, "switch": str | None, "done": int, "total": int}.
+    """
+    mod = _LAB_MODULES["1"]
+    state = getattr(mod, "BOOTSTRAP_STATE", "_skeleton")
+    total = len(SWITCHES) + 2  # stage step + per-switch + workers step
+    done = 0
+    yield {"label": "Staging the Lab 1 baseline", "switch": None, "done": done, "total": total}
+
+    pre_extra = getattr(mod, "pre_bootstrap_extra", None)
+    if callable(pre_extra):
+        pre_extra()
+    _stage_configs(state)
+    done += 1
+    yield {"label": "Re-bootstrapping switches", "switch": None, "done": done, "total": total}
+
+    with ThreadPoolExecutor(max_workers=len(SWITCHES)) as pool:
+        futures = {pool.submit(_bootstrap_one, sw): sw for sw in SWITCHES}
+        for fut in as_completed(futures):
+            sw, _rc, _out = fut.result()
+            done += 1
+            yield {"label": f"Reset {sw}", "switch": sw, "done": done, "total": total}
+
+    _reset_workers_to_underlay()
+    done += 1
+    yield {"label": "Workers reset to the underlay baseline", "switch": None, "done": done, "total": total}
+
     extra = getattr(mod, "bootstrap_extra", None)
     if callable(extra):
         extra()
