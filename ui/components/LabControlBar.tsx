@@ -15,15 +15,6 @@ interface Props {
   onStart: () => void;
   onReset: () => void;
   onSubmit: () => void;
-  onOpenTopology: () => void;
-  /** Collapses the guide pane so the terminal can go full-width. */
-  onToggleFocus: () => void;
-  focusTerminal: boolean;
-  /** Lab 4+: collapses guide + terminals so telemetry has the wide half. */
-  onToggleTelemetryFocus?: () => void;
-  focusTelemetry?: boolean;
-  /** Whether the workbench is rendering a telemetry pane at all. */
-  showTelemetryToggle?: boolean;
   /** Lab 1 boots the bare fabric ("Start lab"); later labs carry forward ("Begin lab"). */
   isFirstLab?: boolean;
 }
@@ -35,12 +26,6 @@ export default function LabControlBar({
   onStart,
   onReset,
   onSubmit,
-  onOpenTopology,
-  onToggleFocus,
-  focusTerminal,
-  onToggleTelemetryFocus,
-  focusTelemetry,
-  showTelemetryToggle,
   isFirstLab = true,
 }: Props) {
   const state = run?.state ?? "not_started";
@@ -61,45 +46,6 @@ export default function LabControlBar({
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        <button
-          onClick={onOpenTopology}
-          className="px-3 py-1.5 rounded border border-white/20 bg-white/5 hover:bg-white/10 text-sm"
-        >
-          Topology
-        </button>
-        <button
-          onClick={onToggleFocus}
-          className={`px-3 py-1.5 rounded border text-sm ${
-            focusTerminal
-              ? "border-sky-400/50 bg-sky-500/15 text-sky-200"
-              : "border-white/20 bg-white/5 hover:bg-white/10"
-          }`}
-          title={
-            focusTerminal
-              ? "Show the guide pane again"
-              : "Collapse the guide pane to give the terminal full width"
-          }
-        >
-          {focusTerminal ? "Show guide" : "Focus terminal"}
-        </button>
-        {showTelemetryToggle && onToggleTelemetryFocus && (
-          <button
-            onClick={onToggleTelemetryFocus}
-            className={`px-3 py-1.5 rounded border text-sm ${
-              focusTelemetry
-                ? "border-violet-400/50 bg-violet-500/15 text-violet-200"
-                : "border-white/20 bg-white/5 hover:bg-white/10"
-            }`}
-            title={
-              focusTelemetry
-                ? "Show all three panes again"
-                : "Collapse guide + terminals to give telemetry the wide half"
-            }
-          >
-            {focusTelemetry ? "Show all panes" : "Focus telemetry"}
-          </button>
-        )}
-
         {state !== "not_started" && (
           <ActionButton
             onClick={onReset}

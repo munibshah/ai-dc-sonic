@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Maximize, Minimize } from "@/components/icons";
 
 interface Props {
   dashboardPath: string;
+  /** Optional focus toggle rendered in the header — collapses guide + terminals
+   *  so telemetry takes the wide half. Per-panel view control, not lab-wide. */
+  onToggleFocus?: () => void;
+  focused?: boolean;
 }
 
 /**
@@ -17,7 +22,7 @@ interface Props {
  * Server-rendering this would produce a wrong URL (no window), so the iframe
  * mounts only after the first client render.
  */
-export default function TelemetryPane({ dashboardPath }: Props) {
+export default function TelemetryPane({ dashboardPath, onToggleFocus, focused }: Props) {
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
@@ -28,19 +33,31 @@ export default function TelemetryPane({ dashboardPath }: Props) {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="px-3 py-2 border-b border-white/10 bg-black/40 text-xs uppercase tracking-wider text-white/50 flex items-center justify-between">
+      <div className="px-3 py-2 border-b border-white/10 bg-black/40 text-xs uppercase tracking-wider text-white/50 flex items-center justify-between gap-2">
         <span>Telemetry</span>
-        {src && (
-          <a
-            href={src}
-            target="_blank"
-            rel="noreferrer"
-            className="text-sky-300/70 hover:text-sky-200 normal-case lowercase text-[10px]"
-            title="Open the dashboard in a new tab (full Grafana UI)"
-          >
-            open in new tab ↗
-          </a>
-        )}
+        <div className="flex items-center gap-2">
+          {src && (
+            <a
+              href={src}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sky-300/70 hover:text-sky-200 normal-case lowercase text-[10px]"
+              title="Open the dashboard in a new tab (full Grafana UI)"
+            >
+              open in new tab ↗
+            </a>
+          )}
+          {onToggleFocus && (
+            <button
+              onClick={onToggleFocus}
+              title={focused ? "Restore all panes" : "Focus telemetry — collapse guide + terminals"}
+              aria-label={focused ? "Restore layout" : "Focus telemetry"}
+              className={`p-0.5 rounded ${focused ? "text-violet-300" : "text-white/40 hover:text-white hover:bg-white/10"}`}
+            >
+              {focused ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex-1 min-h-0 bg-black">
         {src ? (

@@ -39,6 +39,14 @@ export const X = (p: IconProps) => (
   <Base {...p}><path d="M18 6 6 18M6 6l12 12" /></Base>
 );
 
+export const Maximize = (p: IconProps) => (
+  <Base {...p}><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></Base>
+);
+
+export const Minimize = (p: IconProps) => (
+  <Base {...p}><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></Base>
+);
+
 export const ArrowRight = (p: IconProps) => (
   <Base {...p}><path d="M5 12h14M13 5l7 7-7 7" /></Base>
 );

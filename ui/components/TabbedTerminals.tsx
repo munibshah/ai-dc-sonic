@@ -2,6 +2,7 @@
 
 import { useImperativeHandle, forwardRef, useState } from "react";
 import Console, { ConsoleStatus } from "@/components/Console";
+import { Maximize, Minimize } from "@/components/icons";
 
 export interface TabbedTerminalsHandle {
   openTerminal: (name: string) => void;
@@ -11,10 +12,15 @@ export interface TabbedTerminalsHandle {
 interface Props {
   onRequestPickDevice?: () => void;
   emptyMessage?: React.ReactNode;
+  /** Optional focus toggle rendered in the tab bar — collapses the guide pane
+   *  so the terminal goes full-width. Lives here (not the lab-wide control bar)
+   *  because it's a per-panel view control. */
+  onToggleFocus?: () => void;
+  focused?: boolean;
 }
 
 const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function TabbedTerminals(
-  { onRequestPickDevice, emptyMessage },
+  { onRequestPickDevice, emptyMessage, onToggleFocus, focused },
   ref
 ) {
   const [tabs, setTabs] = useState<string[]>([]);
@@ -47,7 +53,8 @@ const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function Tabbed
 
   return (
     <div className="on-dark bg-[#0b1020] flex flex-col h-full min-h-0">
-      <div className="flex items-stretch border-b border-white/10 bg-black/40 overflow-x-auto">
+      <div className="flex items-stretch border-b border-white/10 bg-black/40">
+        <div className="flex items-stretch overflow-x-auto flex-1 min-w-0">
         {tabs.map((name) => {
           const isActive = name === active;
           const st = statuses[name] ?? "connecting";
@@ -92,6 +99,19 @@ const TabbedTerminals = forwardRef<TabbedTerminalsHandle, Props>(function Tabbed
         >
           +
         </button>
+        </div>
+        {onToggleFocus && (
+          <button
+            onClick={onToggleFocus}
+            title={focused ? "Restore the guide pane" : "Focus the terminal — hide the guide pane"}
+            aria-label={focused ? "Restore layout" : "Focus terminal"}
+            className={`shrink-0 px-2.5 flex items-center border-l border-white/10 ${
+              focused ? "text-sky-300 bg-sky-500/10" : "text-white/45 hover:text-white hover:bg-black/40"
+            }`}
+          >
+            {focused ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
+          </button>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 bg-black relative">
