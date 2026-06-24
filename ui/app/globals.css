@@ -4,7 +4,600 @@
 
 @import "@xterm/xterm/css/xterm.css";
 
-html, body { background: #0b1020; color: #e5e7eb; }
-body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
+/* Vesper theme fonts. Loaded unconditionally so the swap to Vesper is instant
+   instead of waiting for a font request. Bricolage Grotesque is the display
+   voice (headlines), DM Sans is body, Instrument Serif italic is the personal
+   accent, JetBrains Mono is code. Default-theme rendering only ever uses the
+   fallback ui-sans-serif stack — the Vesper fonts only flip in when
+   data-theme="vesper". */
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap');
 
-.term-host { background: #000; padding: 8px; border-radius: 6px; height: 100%; }
+/* ============================================================
+   Theme tokens
+   ============================================================
+   Three themes: the original dark (`default`), a clean cool `light` mode
+   derived from it (same accent family + system fonts, surfaces inverted to
+   white/slate — see its block below), and the Vesper warm-cream coaching
+   palette imported from /Users/umihani/Documents/Coding/courseshelf-main/
+   Vesper Design System/colors_and_type.css (see ADR-014 / lab notes for the
+   rationale and the SKILL.md that defines the brand).
+
+   Components consume these via two mechanisms:
+     1. Direct: `bg-[var(--surface-base)]` etc. on new code paths.
+     2. Override layer (further down): for any non-default (light-on-cream or
+        light-on-white) theme, we rewrite the existing Tailwind utility classes
+        (bg-black/40, text-white, etc.) to read from the same vars. Those
+        remaps are scoped `:root:not([data-theme="default"])` so they serve
+        both `light` and `vesper`; the few genuinely Vesper-specific rules
+        (display fonts, rust gradients, illustrations) stay `[data-theme=
+        "vesper"]`. This lets the existing components flip without a
+        per-component refactor. The list is intentionally scoped to the
+        classes the UI actually uses today — additions go here when a new
+        class shows up in the components. */
+
+:root,
+:root[data-theme="default"] {
+  /* Surfaces */
+  --surface-canvas:        #0b1020;            /* page bg */
+  --surface-canvas-deep:   #07091a;            /* header strip */
+  --surface-card:          rgba(0, 0, 0, 0.4); /* elevated card */
+  --surface-card-soft:     rgba(0, 0, 0, 0.2); /* dim card (coming-soon) */
+  --surface-chip:          rgba(255, 255, 255, 0.05);
+  --surface-chip-hover:    rgba(255, 255, 255, 0.10);
+
+  /* Hairlines */
+  --line:                  rgba(255, 255, 255, 0.10);
+  --line-strong:           rgba(255, 255, 255, 0.20);
+
+  /* Text */
+  --text-strong:           #ffffff;
+  --text-body:             #e5e7eb;
+  --text-muted:            rgba(255, 255, 255, 0.70);
+  --text-dim:              rgba(255, 255, 255, 0.60);
+  --text-faint:            rgba(255, 255, 255, 0.40);
+
+  /* Accent rails (mapped to existing color uses) */
+  --accent-primary:        #38bdf8;   /* sky-400 family — start lab */
+  --accent-primary-soft:   rgba(56, 189, 248, 0.20);
+  --accent-primary-line:   rgba(56, 189, 248, 0.40);
+  --accent-positive:       #34d399;   /* emerald — submit / passed */
+  --accent-positive-soft:  rgba(52, 211, 153, 0.20);
+  --accent-positive-line:  rgba(52, 211, 153, 0.40);
+  --accent-warning:        #fbbf24;   /* amber — solve */
+  --accent-warning-soft:   rgba(251, 191, 36, 0.15);
+  --accent-warning-line:   rgba(251, 191, 36, 0.40);
+  --accent-danger:         #f43f5e;   /* rose — errors */
+  --accent-danger-soft:    rgba(244, 63, 94, 0.10);
+  --accent-danger-line:    rgba(244, 63, 94, 0.40);
+  --accent-brand:          #a855f7;   /* violet/purple — brand mark + primary CTA */
+  --accent-brand-strong:   #9333ea;   /* primary CTA hover */
+  --accent-brand-ink:      #ffffff;   /* text/icon on a brand-filled CTA */
+  --accent-brand-soft:     rgba(168, 85, 247, 0.14);
+  --accent-brand-line:     rgba(168, 85, 247, 0.40);
+  --accent-brand-ring:     rgba(168, 85, 247, 0.55);
+  --accent-brand-glow:     rgba(168, 85, 247, 0.35);
+
+  /* Focus ring — keyboard-only (:focus-visible). One token, both themes. */
+  --focus-ring:            var(--accent-brand-ring);
+
+  /* Type families */
+  --font-display:          ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-body:             ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-mono:             ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-italic-accent:    Georgia, serif;
+
+  /* Terminal host bg */
+  --term-bg:               #000000;
+}
+
+:root[data-theme="vesper"] {
+  /* Surfaces — Vesper cream + warm whites */
+  --surface-canvas:        #F6F1E8;
+  --surface-canvas-deep:   #ECE3D2;
+  --surface-card:          #FDFAF3;
+  --surface-card-soft:     #F1E3C0;
+  --surface-chip:          #ECE3D2;
+  --surface-chip-hover:    #E3C58A;
+
+  /* Hairlines — warm ink at low alpha (per Vesper README §Borders) */
+  --line:                  rgba(31, 27, 22, 0.10);
+  --line-strong:           rgba(31, 27, 22, 0.18);
+
+  /* Text — cocoa, not soot */
+  --text-strong:           #1F1B16;
+  --text-body:             #2D2A26;
+  --text-muted:            #5C5650;
+  --text-dim:              #8B847C;
+  --text-faint:            #B5AFA5;
+
+  /* Accent rails — rust leads, sage = positive, amber = warning, deep-rust = danger */
+  --accent-primary:        #C75B3C;   /* rust — primary CTA (Start lab) */
+  --accent-primary-soft:   rgba(199, 91, 60, 0.15);
+  --accent-primary-line:   rgba(199, 91, 60, 0.40);
+  --accent-positive:       #5C7A4F;   /* sage — Submit / Passed */
+  --accent-positive-soft:  rgba(92, 122, 79, 0.15);
+  --accent-positive-line:  rgba(92, 122, 79, 0.40);
+  --accent-warning:        #D69544;   /* amber — Solve */
+  --accent-warning-soft:   rgba(214, 149, 68, 0.15);
+  --accent-warning-line:   rgba(214, 149, 68, 0.40);
+  --accent-danger:         #A8482E;   /* deep rust — errors */
+  --accent-danger-soft:    rgba(168, 72, 46, 0.10);
+  --accent-danger-line:    rgba(168, 72, 46, 0.40);
+  --accent-brand:          #C75B3C;   /* rust replaces purple as brand mark + primary CTA */
+  --accent-brand-strong:   #A8482E;   /* primary CTA hover */
+  --accent-brand-ink:      #FDFAF3;   /* warm white on a rust-filled CTA */
+  --accent-brand-soft:     rgba(199, 91, 60, 0.14);
+  --accent-brand-line:     rgba(199, 91, 60, 0.40);
+  --accent-brand-ring:     rgba(199, 91, 60, 0.50);
+  --accent-brand-glow:     rgba(199, 91, 60, 0.22);
+
+  /* Type families — Vesper canon */
+  --font-display:          "Bricolage Grotesque", "Schibsted Grotesk", system-ui, sans-serif;
+  --font-body:             "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-mono:             "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-italic-accent:    "Instrument Serif", Georgia, serif;
+
+  /* Terminal stays dark — a cream terminal would be unreadable; a real
+     SONiC engineer in a real NOC has a black terminal regardless of the
+     surrounding chrome. Keep the contrast. */
+  --term-bg:               #1F1B16;
+}
+
+/* ------------------------------------------------------------
+   Light theme — a clean, cool light mode derived from `default`.
+   Unlike Vesper (warm cream + rust, custom display fonts) this keeps the
+   dark theme's whole identity — the sky/emerald/amber/rose/violet accent
+   family and the system font stack — and simply inverts the surfaces to
+   white/slate with dark ink. Accent hues are nudged one shade darker so
+   they hold contrast against white.
+
+   It exists because two surfaces are designed to live on a dark ground and
+   read badly on Vesper's cream: the SVG topology diagram (light node labels)
+   and the xterm terminal. Light keeps those as explicit dark islands — see
+   the `.bg-[#0b1020]` remap below, which is scoped to Vesper only so the
+   pinned dark hex survives untouched in light mode.
+   ------------------------------------------------------------ */
+:root[data-theme="light"] {
+  /* Surfaces — cool white / slate, distinct from Vesper's warm cream */
+  --surface-canvas:        #f1f5f9;            /* slate-100 page bg */
+  --surface-canvas-deep:   #ffffff;            /* header strip — white */
+  --surface-card:          #ffffff;            /* elevated card */
+  --surface-card-soft:     #f1f5f9;            /* dim card (coming-soon) */
+  --surface-chip:          rgba(15, 23, 42, 0.05);
+  --surface-chip-hover:    rgba(15, 23, 42, 0.10);
+
+  /* Hairlines */
+  --line:                  rgba(15, 23, 42, 0.10);
+  --line-strong:           rgba(15, 23, 42, 0.18);
+
+  /* Text — slate ink */
+  --text-strong:           #0f172a;            /* slate-900 */
+  --text-body:             #1e293b;            /* slate-800 */
+  --text-muted:            #475569;            /* slate-600 */
+  --text-dim:              #64748b;            /* slate-500 */
+  --text-faint:            #94a3b8;            /* slate-400 */
+
+  /* Accents — same family as default, one shade deeper for contrast on white */
+  --accent-primary:        #0284c7;   /* sky-600 — start lab */
+  --accent-primary-soft:   rgba(2, 132, 199, 0.12);
+  --accent-primary-line:   rgba(2, 132, 199, 0.35);
+  --accent-positive:       #059669;   /* emerald-600 — submit / passed */
+  --accent-positive-soft:  rgba(5, 150, 105, 0.12);
+  --accent-positive-line:  rgba(5, 150, 105, 0.35);
+  --accent-warning:        #d97706;   /* amber-600 — solve */
+  --accent-warning-soft:   rgba(217, 119, 6, 0.14);
+  --accent-warning-line:   rgba(217, 119, 6, 0.40);
+  --accent-danger:         #e11d48;   /* rose-600 — errors */
+  --accent-danger-soft:    rgba(225, 29, 72, 0.10);
+  --accent-danger-line:    rgba(225, 29, 72, 0.38);
+  --accent-brand:          #7c3aed;   /* violet-600 — brand mark + primary CTA */
+  --accent-brand-strong:   #6d28d9;   /* violet-700 — primary CTA hover */
+  --accent-brand-ink:      #ffffff;   /* text/icon on a brand-filled CTA */
+  --accent-brand-soft:     rgba(124, 58, 237, 0.10);
+  --accent-brand-line:     rgba(124, 58, 237, 0.35);
+  --accent-brand-ring:     rgba(124, 58, 237, 0.45);
+  --accent-brand-glow:     rgba(124, 58, 237, 0.30);
+
+  --focus-ring:            var(--accent-brand-ring);
+
+  /* Fonts — keep the default system stack (Vesper's display fonts are its own
+     identity; Light is just dark-inverted, not re-typeset). */
+  --font-display:          ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-body:             ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  --font-mono:             ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-italic-accent:    Georgia, serif;
+
+  /* Terminal + topology diagram stay on a dark ground (see note above). */
+  --term-bg:               #0b1020;
+}
+
+/* ============================================================
+   Base
+   ============================================================ */
+html, body {
+  background: var(--surface-canvas);
+  color: var(--text-body);
+}
+body {
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Vesper body refinements — feature settings + line-height polish */
+:root[data-theme="vesper"] body {
+  font-feature-settings: "ss01" on, "cv01" on;
+  line-height: 1.55;
+}
+
+/* Display-font promotion: when Vesper is active, h1/h2/h3 use Bricolage. */
+:root[data-theme="vesper"] h1,
+:root[data-theme="vesper"] h2,
+:root[data-theme="vesper"] h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Selection — rust in Vesper, browser default elsewhere. */
+:root[data-theme="vesper"] ::selection {
+  background: var(--accent-primary);
+  color: #FDFAF3;
+}
+
+.term-host { background: var(--term-bg); padding: 8px; border-radius: 6px; height: 100%; }
+
+/* ---- Dark islands (`.on-dark`) ----
+   A few surfaces are designed to stay dark in EVERY theme: the xterm terminal
+   (hardcoded black canvas), the full-screen topology picker, and the "lab
+   complete" celebration card (a deep emerald gradient). In Light mode the
+   generic remap layer would otherwise turn their text dark-on-dark.
+
+   Rather than re-pin each utility one by one, we re-declare the design tokens
+   to their dark-theme values inside `.on-dark`. CSS custom properties inherit,
+   so every token-driven remap (`.text-white { color: var(--text-strong) }`,
+   etc.) resolves to its dark appearance for descendants — light text on dark,
+   borders visible, accents bright. One block covers all three islands.
+
+   Scoped to Light only; Vesper keeps its existing behaviour. Each island
+   supplies its own solid dark background (terminal: `bg-[#0b1020]`; overlay:
+   `bg-black/85`; card: the emerald gradient) so translucent children composite
+   over dark, not over the light page. */
+:root[data-theme="light"] .on-dark {
+  --surface-canvas:        #0b1020;
+  --surface-canvas-deep:   #07091a;
+  --surface-card:          rgba(0, 0, 0, 0.4);
+  --surface-card-soft:     rgba(0, 0, 0, 0.2);
+  --surface-chip:          rgba(255, 255, 255, 0.05);
+  --surface-chip-hover:    rgba(255, 255, 255, 0.10);
+  --line:                  rgba(255, 255, 255, 0.10);
+  --line-strong:           rgba(255, 255, 255, 0.20);
+  --text-strong:           #ffffff;
+  --text-body:             #e5e7eb;
+  --text-muted:            rgba(255, 255, 255, 0.70);
+  --text-dim:              rgba(255, 255, 255, 0.60);
+  --text-faint:            rgba(255, 255, 255, 0.40);
+  --accent-primary:        #38bdf8;
+  --accent-positive:       #34d399;
+  --accent-warning:        #fbbf24;
+  --accent-danger:         #f43f5e;
+  --accent-brand:          #a855f7;
+  --term-bg:               #000000;
+  color: var(--text-body);
+}
+
+/* --- UX polish animations --- */
+
+/* Brief flash applied to the lab state pill on transition so the eye catches it. */
+@keyframes pill-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0.55); transform: scale(1); }
+  50%  { box-shadow: 0 0 0 6px rgba(125, 211, 252, 0); transform: scale(1.04); }
+  100% { box-shadow: 0 0 0 0 rgba(125, 211, 252, 0); transform: scale(1); }
+}
+.pill-flash { animation: pill-flash 0.9s ease-out 1; }
+
+/* Toast enter animation: slide in from the right, fade in. */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-4px) translateX(8px); }
+  to   { opacity: 1; transform: translateY(0) translateX(0); }
+}
+.toast-enter { animation: toast-in 180ms ease-out 1; }
+
+/* Indeterminate status-bar bar that slides back and forth. */
+@keyframes status-bar-slide {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(100%); }
+  100% { transform: translateX(300%); }
+}
+.animate-status-bar { animation: status-bar-slide 1.4s ease-in-out infinite; }
+
+/* CheckResultsCard row flip: tint transitions smoothly when a row leaves pending. */
+.check-row-tint { transition: background-color 220ms ease, color 220ms ease; }
+
+/* ============================================================
+   Vesper override layer
+   ============================================================
+   The existing components use Tailwind utility classes with hardcoded
+   slate/white/sky/emerald/amber/rose/purple colors. Rather than refactor
+   every component, we rewrite those exact classes under [data-theme="vesper"]
+   to consume the Vesper tokens. This is brittle by design — additions to
+   this list happen when a new hardcoded class shows up in the UI and looks
+   wrong in Vesper mode. Keep selectors specific (no !important except for
+   gradient overrides where Tailwind's specificity beats ours). */
+
+/* ---- Surfaces ---- */
+:root[data-theme="vesper"] .bg-\[\#0b1020\]         { background-color: var(--surface-canvas-deep); }
+:root:not([data-theme="default"]) .bg-black\/40            { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-black\/60            { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-black\/30            { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-black\/20            { background-color: var(--surface-card-soft); }
+:root:not([data-theme="default"]) .hover\:bg-black\/60:hover { background-color: var(--surface-card); }
+:root:not([data-theme="default"]) .bg-white\/5             { background-color: var(--surface-chip); }
+:root:not([data-theme="default"]) .bg-white\/8             { background-color: var(--surface-chip); }
+:root:not([data-theme="default"]) .bg-white\/10            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/12            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/15            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/20            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/25            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .bg-white\/40            { background-color: var(--surface-chip-hover); }
+:root:not([data-theme="default"]) .hover\:bg-white\/10:hover { background-color: var(--surface-chip-hover); }
+
+/* Tinted utility bgs — flatten to soft accent washes */
+:root:not([data-theme="default"]) .bg-sky-500\/10          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-500\/15          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-500\/20          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-500\/30          { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .hover\:bg-sky-500\/30:hover { background-color: var(--accent-primary-soft); }
+:root:not([data-theme="default"]) .bg-sky-400\/15          { background-color: var(--accent-primary-soft); }
+
+:root:not([data-theme="default"]) .bg-emerald-500\/10      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .bg-emerald-500\/15      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .bg-emerald-500\/20      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .bg-emerald-500\/30      { background-color: var(--accent-positive-soft); }
+:root:not([data-theme="default"]) .hover\:bg-emerald-500\/30:hover { background-color: var(--accent-positive-soft); }
+
+:root:not([data-theme="default"]) .bg-amber-500\/10        { background-color: var(--accent-warning-soft); }
+:root:not([data-theme="default"]) .bg-amber-500\/15        { background-color: var(--accent-warning-soft); }
+:root:not([data-theme="default"]) .bg-amber-500\/20        { background-color: var(--accent-warning-soft); }
+:root:not([data-theme="default"]) .hover\:bg-amber-500\/20:hover { background-color: var(--accent-warning-soft); }
+
+:root:not([data-theme="default"]) .bg-rose-500\/10         { background-color: var(--accent-danger-soft); }
+:root:not([data-theme="default"]) .bg-rose-500\/15         { background-color: var(--accent-danger-soft); }
+
+:root:not([data-theme="default"]) .bg-violet-500\/15       { background-color: var(--accent-primary-soft); }
+
+/* ---- Hairlines ---- */
+:root:not([data-theme="default"]) .border-white\/10        { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-white\/12        { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-white\/15        { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-white\/20        { border-color: var(--line-strong); }
+:root:not([data-theme="default"]) .hover\:border-white\/30:hover { border-color: var(--line-strong); }
+
+:root:not([data-theme="default"]) .border-sky-400\/30      { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-sky-400\/40      { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-sky-400\/50      { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-sky-400\/60      { border-color: var(--accent-primary-line); }
+
+:root:not([data-theme="default"]) .border-emerald-400\/30  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-400\/40  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-400\/50  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-400\/60  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .border-emerald-500\/40  { border-color: var(--accent-positive-line); }
+:root:not([data-theme="default"]) .hover\:border-emerald-400\/50:hover { border-color: var(--accent-positive-line); }
+
+:root:not([data-theme="default"]) .border-amber-400\/30    { border-color: var(--accent-warning-line); }
+:root:not([data-theme="default"]) .border-amber-400\/40    { border-color: var(--accent-warning-line); }
+:root:not([data-theme="default"]) .border-amber-400\/50    { border-color: var(--accent-warning-line); }
+
+:root:not([data-theme="default"]) .border-rose-400\/30     { border-color: var(--accent-danger-line); }
+:root:not([data-theme="default"]) .border-rose-400\/40     { border-color: var(--accent-danger-line); }
+:root:not([data-theme="default"]) .border-rose-500\/40     { border-color: var(--accent-danger-line); }
+
+:root:not([data-theme="default"]) .border-violet-400\/50   { border-color: var(--accent-primary-line); }
+
+:root:not([data-theme="default"]) .border-purple-500\/20   { border-color: var(--line); }
+:root:not([data-theme="default"]) .border-purple-400\/30   { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .border-purple-400\/60   { border-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .ring-purple-400\/30    { --tw-ring-color: var(--accent-primary-line); }
+:root:not([data-theme="default"]) .group:hover .group-hover\:ring-purple-400\/60 { --tw-ring-color: var(--accent-primary-line); }
+
+/* ---- Text ---- */
+:root:not([data-theme="default"]) .text-white              { color: var(--text-strong); }
+:root:not([data-theme="default"]) .text-white\/90          { color: var(--text-strong); }
+:root:not([data-theme="default"]) .text-white\/85          { color: var(--text-body); }
+:root:not([data-theme="default"]) .text-white\/80          { color: var(--text-body); }
+:root:not([data-theme="default"]) .text-white\/70          { color: var(--text-muted); }
+:root:not([data-theme="default"]) .text-white\/65          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/60          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/55          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/50          { color: var(--text-dim); }
+:root:not([data-theme="default"]) .text-white\/45          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .text-white\/40          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .text-white\/30          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .text-white\/25          { color: var(--text-faint); }
+:root:not([data-theme="default"]) .hover\:text-white:hover { color: var(--text-strong); }
+:root:not([data-theme="default"]) .text-purple-300\/80     { color: var(--text-muted); }
+:root:not([data-theme="default"]) .text-purple-300         { color: var(--accent-primary); }
+
+:root:not([data-theme="default"]) .text-sky-100            { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-sky-200            { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-sky-300            { color: var(--accent-primary); }
+:root:not([data-theme="default"]) .text-emerald-100        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-200        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-300        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-400        { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-emerald-400\/70    { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .group:hover .group-hover\:text-emerald-200 { color: var(--accent-positive); }
+:root:not([data-theme="default"]) .text-amber-200          { color: var(--accent-warning); }
+:root:not([data-theme="default"]) .text-amber-300          { color: var(--accent-warning); }
+:root:not([data-theme="default"]) .text-rose-100           { color: var(--accent-danger); }
+:root:not([data-theme="default"]) .text-rose-200           { color: var(--accent-danger); }
+:root:not([data-theme="default"]) .text-violet-200         { color: var(--accent-primary); }
+
+/* ---- Shadows / glows ---- */
+:root:not([data-theme="default"]) .shadow-\[0_0_40px_rgba\(168\,85\,247\,0\.25\)\] {
+  box-shadow: 0 1px 0 rgba(31,27,22,0.04), 0 16px 40px -20px rgba(31,27,22,0.25);
+}
+
+/* ---- Header gradient kill (LabsIndex hero) ----
+   Tailwind generates `--tw-gradient-from`/`--tw-gradient-to`. Override the
+   gradient with a flat warm card surface; the radial accent inside the hero
+   is replaced with a soft rust wash. */
+:root[data-theme="vesper"] .bg-gradient-to-br {
+  background-image: none !important;
+  background-color: var(--surface-card);
+}
+:root[data-theme="vesper"] .bg-\[radial-gradient\(ellipse_at_right\,_rgba\(168\,85\,247\,0\.55\)\,_transparent_60\%\)\] {
+  background-image: radial-gradient(ellipse at right, rgba(199, 91, 60, 0.18), transparent 60%) !important;
+}
+/* Light keeps the violet accent family — flat white surface with a soft
+   violet wash, so the hero reads as the same brand on a bright ground. */
+:root[data-theme="light"] .bg-gradient-to-br {
+  background-image: none !important;
+  background-color: var(--surface-card);
+}
+:root[data-theme="light"] .bg-\[radial-gradient\(ellipse_at_right\,_rgba\(168\,85\,247\,0\.55\)\,_transparent_60\%\)\] {
+  background-image: radial-gradient(ellipse at right, rgba(124, 58, 237, 0.12), transparent 60%) !important;
+}
+
+/* ---- Code blocks & inline mono — read better against cream ---- */
+:root:not([data-theme="default"]) code,
+:root:not([data-theme="default"]) pre {
+  background-color: var(--surface-card-soft);
+  color: var(--text-strong);
+}
+
+/* ---- Theme-swapped logo ----
+   Both <img>s are rendered; CSS toggles which one paints. The unused image
+   still downloads (browsers don't defer display:none img loads reliably),
+   but it's a one-time cost per session and lets the swap be instant when
+   the toggle flips — no flash, no React state, no SSR/hydration dance. */
+.theme-logo-dark  { display: block; }
+.theme-logo-light { display: none; }
+:root:not([data-theme="default"]) .theme-logo-dark  { display: none; }
+:root:not([data-theme="default"]) .theme-logo-light { display: block; }
+
+/* ---- Vesper-only elements ----
+   Used for the illustrations on each lab card. They're designed on a cream
+   ground (rust + sage + amber on canvas-warm) and would look out of place
+   on the dark theme's near-black cards, so we render them only in Vesper. */
+.vesper-only { display: none; }
+:root[data-theme="vesper"] .vesper-only { display: block; }
+
+/* Right-padding to reserve space for the corner illustration. Only applied
+   in Vesper mode — in dark mode there's no illustration and the title /
+   badges should use the full card width. ~80px clears a 52px-tall corner
+   accent. */
+:root[data-theme="vesper"] .lab-card-clear-corner { padding-right: 80px; }
+
+/* ============================================================
+   Component layer — shared, token-driven primitives
+   ============================================================
+   Introduced in the UX polish pass. These give the sell surfaces a single
+   consistent button + hero + focus treatment that flips correctly between the
+   dark and Vesper themes (everything reads from the --accent-* / --surface-*
+   tokens above), replacing the scattered per-element Tailwind color classes. */
+
+/* ---- Keyboard focus ring (keyboard-only via :focus-visible) ---- */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent-brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ---- Buttons ----
+   .btn base + one of {.btn-primary, .btn-secondary, .btn-ghost, .btn-success,
+   .btn-danger}. Optional sizes .btn-sm / .btn-lg. Primary = brand accent. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.1;
+  padding: 0.625rem 1.1rem;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .18s ease, border-color .18s ease,
+              color .18s ease, box-shadow .18s ease, transform .12s ease;
+}
+.btn:active { transform: translateY(0.5px) scale(0.995); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-sm { padding: 0.4rem 0.75rem; font-size: 0.8125rem; border-radius: 0.5rem; }
+.btn-lg { padding: 0.8rem 1.5rem; font-size: 0.95rem; border-radius: 0.7rem; }
+
+.btn-primary {
+  background-color: var(--accent-brand);
+  color: var(--accent-brand-ink);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 8px 24px -12px var(--accent-brand-glow);
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-brand-strong);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.08) inset, 0 10px 28px -10px var(--accent-brand-glow);
+}
+
+.btn-secondary {
+  background-color: var(--surface-chip);
+  color: var(--text-strong);
+  border-color: var(--line-strong);
+}
+.btn-secondary:hover:not(:disabled) { background-color: var(--surface-chip-hover); }
+
+.btn-ghost { background-color: transparent; color: var(--text-muted); }
+.btn-ghost:hover:not(:disabled) { background-color: var(--surface-chip); color: var(--text-strong); }
+
+.btn-success {
+  background-color: var(--accent-positive);
+  color: #06140d;
+}
+.btn-success:hover:not(:disabled) { filter: brightness(1.06); }
+
+.btn-danger {
+  background-color: var(--accent-danger-soft);
+  color: var(--accent-danger);
+  border-color: var(--accent-danger-line);
+}
+.btn-danger:hover:not(:disabled) { background-color: var(--accent-danger-soft); filter: brightness(1.15); }
+
+/* ---- Brand hero surface ----
+   Token-driven gradient that works in both themes (no hardcoded hex, so Vesper
+   needs no !important override). Used by the landing + labs-index headers. */
+.brand-hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 140% at 88% 0%, var(--accent-brand-soft), transparent 55%),
+    linear-gradient(160deg, var(--surface-canvas-deep), var(--surface-canvas));
+  border: 1px solid var(--line);
+}
+:root[data-theme="vesper"] .brand-hero {
+  background:
+    radial-gradient(120% 140% at 88% 0%, var(--accent-brand-soft), transparent 55%),
+    linear-gradient(160deg, var(--surface-card), var(--surface-canvas-deep));
+}
+
+/* ---- Eyebrow + pill helpers ---- */
+.eyebrow {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--accent-brand);
+  font-weight: 600;
+}
+
+/* Subtle live/status dot used in proof rows. */
+@keyframes dot-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.live-dot { animation: dot-pulse 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot, .pill-flash, .toast-enter, .animate-status-bar, .check-row-tint { animation: none; transition: none; }
+  .btn { transition: none; }
+}

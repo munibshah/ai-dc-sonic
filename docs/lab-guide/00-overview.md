@@ -38,21 +38,9 @@ Each step has a **💡 Why this matters in AI DCs** callout explaining the *reas
 
 ## Prerequisites
 
-The lab needs to be deployed in baseline state. From your laptop:
+Your instructor (or you, as the operator) has deployed the fabric — 16 containers running on the lab host: 2 spines, 4 leaves, 8 GPU workers, the orchestrator, and this UI. The lab is reachable in your browser at the host's port 3000. If you're the operator setting this up, see the top-level `README.md`; everything below assumes the lab is up.
 
-```bash
-make pull         # one-time: pull sonic-vs + build worker image (~5 min)
-make warm         # bring up 14 containers + apply working configs (~3 min)
-make ping-mesh    # confirm 56/56 OK
-```
-
-Then wipe the switch configs to put yourself in exercise mode:
-
-```bash
-make wipe         # switches now have empty FRR configs — no L3, no BGP
-```
-
-Open the UI: **http://192.168.1.26:3000/topology**. Every switch should still be reachable in the topology view (containers are still up), but nothing is routed.
+Open the lab index → click **Lab 1 · Build the BGP Underlay**. You'll land on this workbench: guide on the left, terminals on the right, control bar across the top with **Start lab ▶**, **Reset**, **Solve**, **Reveal solution**, **Submit ✓**.
 
 ---
 
@@ -60,36 +48,28 @@ Open the UI: **http://192.168.1.26:3000/topology**. Every switch should still be
 
 For each switch:
 
-1. In the UI topology view, click the switch → console pane opens (this is `docker exec -it <switch> bash` over a WebSocket PTY — a full terminal inside the container)
-2. Discover current state with `ip -br link show`, `ip -br addr show`
-3. Enter `vtysh`, then `configure terminal`
-4. Configure interfaces (loopback + fabric P2Ps)
-5. Configure BGP (router-id, peer-group, neighbors, address-family)
-6. Verify with `do show ip bgp summary`, `do show ip route`
-7. Exit vtysh, `ping` a neighbor to confirm L3 reachability
+1. Click **Topology** in the top bar, or **+** in the terminals pane, and pick the switch — its console tab opens (a real `docker exec -it <switch> bash` over a WebSocket PTY).
+2. Discover current state with `ip -br link show`, `ip -br addr show`.
+3. Enter `vtysh`, then `configure terminal`.
+4. Configure interfaces (loopback + fabric P2Ps).
+5. Configure BGP (router-id, peer-group, neighbors, address-family).
+6. Verify with `do show ip bgp summary`, `do show ip route`.
+7. Exit vtysh, `ping` a neighbor to confirm L3 reachability.
+8. Click the inline **Check ▸** widget under the step to confirm — pass/fail comes back in ~2 seconds.
 
-Per-switch the IP/ASN inputs come from [`../topology.md`](../topology.md) §3 (per-device factsheets) and §5 (BGP peer matrix). Keep that doc open in another tab.
+Per-switch IP/ASN inputs come from [`../topology.md`](../topology.md) §3 (per-device factsheets) and §5 (BGP peer matrix). Keep that doc open in another tab.
 
 ---
 
 ## Persistence note (important!)
 
-The commands you run in `vtysh` go straight to the running FRR daemons. **They are not written back to disk.** If the container restarts, your work disappears.
+The commands you run in `vtysh` go straight to the running FRR daemons. **They are not written back to disk.** If a switch container restarts, your work disappears — but the orchestrator never restarts switch containers, so you can safely walk away. Close the browser and come back tomorrow; your **session, lab state, attempts counter, and last submit result all persist** server-side.
 
-That's deliberate for the learning phase — feel free to break things. Two ways to recover or persist:
+If you get stuck:
 
-- **To revert to the canonical (working) config**: `make solve`. This `git checkout`s the committed `configs/frr/<node>/frr.conf` files and re-applies via `vtysh -b`. Restores the lab to its working state in ~30s.
-- **To make your own work persist across restarts**: open `configs/frr/<node>/frr.conf` on your laptop, paste the FRR-format equivalent of the commands you ran in vtysh (see [`02-solution.md`](02-solution.md)'s appendix for the mapping), then `make sync && make fabric-bootstrap`. Now your edits are the source of truth.
-
----
-
-## Reset commands
-
-```bash
-make wipe         # blank out switch configs + reload — lab goes to "exercise" mode
-make solve        # git checkout the canonical configs + reload — lab returns to working state
-make lab-status   # one-shot "am I done?" — shows BGP table + ping-mesh totals
-```
+- **Reveal solution** — show the canonical vtysh sequence side-by-side with your work.
+- **Solve** — push the canonical config into the live fabric (your run is flagged "solved" in the completion screen).
+- **Reset** — wipe everything back to a bare fabric and try again from scratch.
 
 ---
 

@@ -12,11 +12,11 @@ A virtual AI Data Center fabric you control from your laptop. Built to learn —
         gpu1 2 3 4  5 6  7 8                    PyTorch+Gloo workers
 ```
 
-- **2 spine** + **4 leaf** SONiC switches (`netreplica/docker-sonic-vs`)
+- **2 spine** + **4 leaf** SONiC switches (`aidc/sonic-vs:202511`, built from the SONiC project's `202511` Azure CI release; FRR 10.4.1)
 - **8 "GPU" worker nodes** running real CPU-based collective ops (PyTorch + Gloo)
-- **EVPN-VXLAN overlay** stretches all GPUs into one L2 segment (rail-optimized pattern) — *Phase 3*
-- **gNMI → Prometheus → Grafana** telemetry stack — *Phase 4*
-- **Next.js + FastAPI** dashboard with in-browser device consoles and live topology view — *✓ shipped*
+- **EVPN-VXLAN overlay** stretches all GPUs into one L2 segment (rail-optimized pattern) — *Labs 2–3 ✓*
+- **gNMI → Prometheus → Grafana** telemetry stack with live per-link Mbps charts during AllReduce — *Lab 4 ✓*
+- **Next.js + FastAPI** dashboard with in-browser device consoles, live topology view, and embedded Grafana telemetry — *✓ shipped*
 
 Built in phases. **Phase 1** (BGP underlay) and **Phase 2** (Web UI) are done. See [scenarios/00-bring-up-fabric.md](scenarios/00-bring-up-fabric.md) for the demo.
 
@@ -32,9 +32,11 @@ The lab runs on a **remote Linux host** (any Ubuntu/Debian box with Docker). You
 ┌─────────────────────┐         SSH         ┌─────────────────────────────┐
 │  Your laptop        │ ──────────────────► │  Remote Linux host          │
 │  • git/$EDITOR      │                     │  • Docker + Containerlab    │
-│  • `make sync`      │     rsync (push)    │  • 14 containers (the lab)  │
+│  • `make sync`      │     rsync (push)    │  • 17 containers (the lab)  │
 │  • `make warm`      │ ──────────────────► │  • FastAPI :8000            │
 │  • browser → :3000  │ ──── HTTP/WS ─────► │  • Next.js  :3000           │
+│                     │                     │  • Grafana  :3001 (Lab 4+)  │
+│                     │                     │  • Prom     :9090 (Lab 4+)  │
 └─────────────────────┘                     └─────────────────────────────┘
 ```
 
@@ -180,10 +182,18 @@ Successful `warm` ends with all 56 worker-pair pings passing and BGP up on every
 
 | Image | What it is | Source |
 |---|---|---|
-| `netreplica/docker-sonic-vs:latest` | The SONiC NOS for the spine and leaf switches (upstream, ~270 MB) | [netreplica](https://hub.docker.com/r/netreplica/docker-sonic-vs) |
+| `aidc/sonic-vs:202511` | The SONiC NOS for the spine and leaf switches (built locally on the lab host from the official `docker-sonic-vs.gz` artifact on the SONiC `202511` Azure CI branch, FRR 10.4.1, ~1.75 GB). See ADR-011 for the upgrade rationale. | [sonic.software](https://sonic.software/) catalog → `docker-sonic-vs.gz` |
 | `munibshah/aidc-worker:latest` | GPU-worker image (multi-arch amd64/arm64, ~1.5 GB) — Python + PyTorch CPU + Gloo + iperf3 + tcpdump | [workers/Dockerfile](workers/Dockerfile) |
 | `munibshah/aidc-orchestrator:latest` | FastAPI backend that drives the in-browser device consoles (multi-arch, ~250 MB) | [orchestrator/Dockerfile](orchestrator/Dockerfile) |
 | `munibshah/aidc-ui:latest` | Next.js UI in production mode (multi-arch, ~1.2 GB) | [ui/Dockerfile](ui/Dockerfile) |
+
+To install the SONiC image on a fresh lab host:
+```sh
+URL=$(curl -s https://sonic.software/builds.json | jq -r '.["202511"]["docker-sonic-vs.gz"].url')
+curl -sSL "$URL" -o /tmp/docker-sonic-vs-202511.gz
+docker load < /tmp/docker-sonic-vs-202511.gz
+docker tag docker-sonic-vs:latest aidc/sonic-vs:202511
+```
 
 The defaults are set in the Makefile (`WORKER_IMAGE`, `ORCHESTRATOR_IMAGE`, `UI_IMAGE`). Override per-invocation if you maintain your own fork:
 ```bash
@@ -216,11 +226,43 @@ make shell-orchestrator  # interactive shell inside the FastAPI container
 
 Both backend (`orchestrator/api/main.py`, [Dockerfile](orchestrator/Dockerfile)) and frontend (`ui/`, Next.js + xterm.js + react-markdown, [Dockerfile](ui/Dockerfile)) run as containers managed by containerlab. The backend mounts `/var/run/docker.sock` from the host so it can `docker exec -it` into the other lab containers; it streams stdio over a WebSocket to the browser. The frontend pages:
 
-- **/** — **Labs index.** Cards for each lab (Lab 1 active; Labs 2–4 are placeholders for future content).
+- **/** — **Labs index.** Cards for each lab (Labs 1–6 active; Lab 7 is a placeholder for future content).
 - **/labs/&lt;id&gt;** — **Lab workbench.** Free-scroll markdown guide on the left + tabbed terminal pane on the right + a "Topology" button that pops a clickable fabric diagram for picking which device to console into. Multiple terminals stay open across tab switches.
 - **/topology** — Standalone topology view (hover a device to see its links' IPs; click for a single console).
 - **/console/&lt;name&gt;** — Standalone single-device terminal.
 - **/devices** — Flat device grid (the original home page).
+
+---
+
+## Booking & public access (Cloudflare)
+
+The lab is a **single shared fabric**, so concurrent learners can clobber each other's state. The booking layer turns it into a sellable product: a **public marketing site + lab guides**, **magic-link sign-in**, **bookable exclusive fabric slots** with **confirmation emails**, and a roster for instructor-led training — all on managed Cloudflare services (+ Resend) at near-zero cost.
+
+```
+Anyone ──HTTPS──▶ Cloudflare Tunnel ──▶ lab host
+                    ├─ lab.<domain>      → UI         :3000   (public landing + /labs previews; /app/* gated)
+                    │     /api,/ws        → orchestrator :8000  (reads only are public; mutating routes cookie-gated)
+                    │     /booking-api/*  → booking Worker (Workers Route, at the edge)
+                    └─ grafana.<domain>  → Grafana    :3001
+Identity: magic-link email → signed `aidc_auth` cookie (the Worker is the auth authority — no per-seat cap)
+Email:    Resend (transactional: sign-in links + booking/training confirmations with .ics)
+```
+
+- **Single hostname.** Everything lives under `lab.<domain>` so one sign-in covers the UI, the orchestrator API, and the Worker (same-origin cookie). No Cloudflare Access (removed — it caps at 50 users).
+- **`booking/`** — the Worker: magic-link auth (`/auth/*`), slot reservations + training roster (`/api/*`), public teasers (`/public/*`), email via Resend. Deploy with `make deploy-booking`; schema with `make booking-schema`. See [booking/README.md](booking/README.md).
+- **Identity** is the signed `aidc_auth` cookie. The orchestrator gate ([orchestrator/api/booking_gate.py](orchestrator/api/booking_gate.py) + [auth.py](orchestrator/api/auth.py)) HMAC-verifies it and lets only the **current slot holder** Start/Reset/Solve or open a console. Enable with these orchestrator env vars (all set by `source cloudflare/env.public.sh`):
+
+  | Env | Meaning |
+  |---|---|
+  | `AIDC_BOOKING_ENFORCE=1` | enforce the gate (default off → single-user mode) |
+  | `AIDC_BOOKING_URL` | Worker base URL for the holder check (`https://aidc-booking.<acct>.workers.dev`) |
+  | `AIDC_BOOKING_SECRET` | shared secret == the Worker's `ORCH_SHARED_SECRET` |
+  | `AIDC_AUTH_SECRET` | HMAC secret == the Worker's `AUTH_SIGNING_SECRET` (verifies the session cookie) |
+  | `AIDC_BOOKING_FAIL_OPEN=1` | (optional) allow lab use if the booking service is unreachable |
+
+- **Email (Resend):** verify your domain in Resend (add the DKIM/SPF DNS records to the Cloudflare zone), then `wrangler secret put RESEND_API_KEY` and set `FROM_EMAIL` in `booking/wrangler.jsonc`. Before that, magic-link URLs are printed to `wrangler tail` so sign-in still works.
+- **Instructor ops** — set the next training and seed slots via the admin endpoints (as the `INSTRUCTOR_EMAIL`) or `wrangler d1 execute` (examples in [booking/README.md](booking/README.md)).
+- **Paid-ready** — `slots.payment_status` exists (always `free` today); add Stripe later without schema churn.
 
 ---
 
@@ -233,10 +275,12 @@ configs/
   sonic/       SONiC config_db.json files (kept for reference — see ADR-008)
 workers/       worker image (Linux + Python + PyTorch CPU + iperf3 + tcpdump)
 automation/    Ansible/Nornir config push  (Phase 3)
-telemetry/     gNMIc + Prometheus + Grafana (Phase 4)
+telemetry/     gnmic + Prometheus + Grafana stack (Lab 4 — live dashboards during AllReduce)
 scenarios/     numbered demo scripts — start with 00-bring-up-fabric.md
-orchestrator/  FastAPI backend (devices API + WebSocket console PTY)
+orchestrator/  FastAPI backend (devices API + WebSocket console PTY + booking gate)
 ui/            Next.js 15 dashboard
+booking/       Cloudflare Worker + D1 — slot reservations + training roster
+cloudflare/    Cloudflare Tunnel ingress config (public HTTPS, no port-forwarding)
 docs/          reference docs (topology, CLI cheat sheet) + blog posts
 notes/         ADR-lite decision records
 ```
@@ -246,28 +290,43 @@ notes/         ADR-lite decision records
 - **PFC/ECN on sonic-vs is not real silicon.** The dataplane is the Linux kernel. We demo the *configuration workflow* on SONiC and the *behavior* via Linux qdiscs.
 - **VXLAN encap is software.** Throughput is hundreds of Mbps, not 100 Gbps. Bandwidth is a relative signal here, not an absolute one.
 - **No real GPUs.** PyTorch runs on CPU via the Gloo backend. The collective ops are *real* (real AllReduce ring algorithm, real bytes on the wire); the matmuls are slow. We are studying the network, not the math.
-- **SONiC's config_db path isn't fully wired.** The `netreplica/docker-sonic-vs` image we use (the only readily available SONiC VS image) is from 2021 and doesn't load the modern `BGP_GLOBALS` table layout. We bypass it and configure FRR directly via bind-mounted `frr.conf` files. The config_db.json files are kept as a reference for what the same fabric would look like under a modern SONiC build. See [ADR-008](notes/decisions.md).
+- **We configure FRR directly via bind-mounted `frr.conf`** rather than driving it through SONiC's `config_db.json` → `bgpcfgd` pipeline. Modern SONiC (we run `aidc/sonic-vs:202511`, FRR 10.4.1) handles `BGP_GLOBALS*` correctly — see [ADR-011](notes/decisions.md) — but the bind-mount approach is portable across any FRR-based NOS and is the most direct interactive surface. The `configs/sonic/<sw>/config_db.json` files are kept as a reference for what the same fabric looks like under a stock SONiC build. See [ADR-008](notes/decisions.md) for the original rationale and [ADR-011](notes/decisions.md) for what the upgrade fixed.
 
 ## Learn by doing
 
-The repo ships with a **hands-on lab guide** that wipes the switch configs and asks you to build the BGP underlay from scratch. Step-by-step solution included for when you get stuck.
+Once `make warm` is up, **the lab is driven entirely from the browser.** Open `http://<host>:3000`, click **Lab 1 · Build the BGP Underlay**, then click **Start lab ▶**. The orchestrator wipes the switches to a bare-bones FRR config, you build the underlay through in-browser consoles, and inline **Check ▸** widgets give you per-step pass/fail. **Submit ✓** at the end runs the full check suite and stamps the lab Passed.
+
+When you're done with Lab 1, click **Lab 2 · Build the EVPN-VXLAN Overlay** for the natural follow-up: stretch a single L2 segment (VNI 10100, subnet 192.168.100.0/24) across all four leaves on top of the underlay you just built, and watch a packet actually ride a VXLAN tunnel for the first time.
+
+After Lab 2, **Lab 3 · GPUs on the Overlay + first AllReduce** brings the eight GPU workers onto that stretched L2 segment as VLAN 1000 access ports and runs a real Gloo AllReduce — first a 2-rank cross-leaf collective by hand, then the full 8-rank version. That's the rail-optimized AI pod pattern, end-to-end at lab scale.
+
+Then **Lab 4 · Telemetry & Visualization with gNMI + Grafana** layers a streaming-telemetry pipeline (gnmic → Prometheus → Grafana) over your working fabric and embeds the dashboard directly in the workbench. You re-run the Lab 3 AllReduces and *watch the per-link Mbps fill in real time* — including ECMP load-spread across both spines. The first lab where you spend more time reading the chart than typing commands.
+
+**Lab 5 · SRv6 uSID Transport + ECMP** lays a Segment Routing over IPv6 (SRv6) transport across the fabric — *additive* alongside the IPv4 underlay and EVPN-VXLAN overlay you already built. You dual-stack the fabric, define micro-SID (uSID) locators in FRR, program kernel `End.DT6` endpoints so each leaf decapsulates, steer flows into uSID with an H.Encaps headend, then watch distinct flows spread per-flow across both spines on the IPv6 flow label — the SRv6 analog of the VXLAN ECMP you saw in Lab 4 (same embedded Grafana dashboard, new encapsulation).
+
+**Lab 6 · Super Spines — Beyond a Single-Pod CLOS** is a conceptual follow-on: walk the radix math that bounds a single pod (~1024 GPUs on 32-port silicon), see what shape a 3rd tier of BGP would take above your existing spines, and understand why hyperscalers schedule training jobs to live inside a pod when they can. Nothing new gets deployed — you inspect the fabric you already have to anchor each point. See [ADR-013](notes/decisions.md) for why this one's conceptual rather than a deploy lab.
+
+Sessions persist server-side (SQLite, mounted at `./.aidc-orchestrator-data`), so you can close the browser, come back tomorrow, and pick up where you left off.
+
+See [`docs/lab-guide/00-overview.md`](docs/lab-guide/00-overview.md) for the teaching guide.
+
+### Operator / recovery commands (out-of-band)
+
+Learners don't need these — they're the operator's recovery toolkit if the fabric itself is broken or you want to bring the lab up/down outside the UI.
 
 ```bash
-make wipe         # blank the switch FRR configs (enter exercise mode)
-$EDITOR configs/frr/leaf1/frr.conf   # …and the other 5 switches
-make sync && make fabric-bootstrap   # apply your edits
-make lab-status   # check progress (BGP established? all 56 pings OK?)
-make solve        # restore working configs from git when done (or to skip ahead)
+make wipe         # blank the switch FRR configs (equivalent to clicking Start in the UI)
+make solve        # apply canonical configs (equivalent to clicking Solve in the UI)
+make lab-status   # BGP-established count + ping-mesh count
+make fabric-bootstrap  # re-run the FRR bootstrap script on every switch
 ```
-
-See [`docs/lab-guide/00-overview.md`](docs/lab-guide/00-overview.md) to start.
 
 ## Phase roadmap
 
 - **Phase 1** — bare fabric, BGP underlay, ECMP ✓
-- **Phase 2** — FastAPI + Next.js UI with web console + topology view ✓ ← **you are here**
-- **Phase 3** — EVPN-VXLAN overlay, first AllReduce, Ansible config push
-- **Phase 4** — gNMI telemetry, Grafana dashboards, incast + ECN demos
+- **Phase 2** — FastAPI + Next.js UI with web console + topology view ✓
+- **Phase 3** — EVPN-VXLAN overlay (Lab 2 ✓), GPUs on the overlay + first AllReduce (Lab 3 ✓), Ansible config push
+- **Phase 4** — gNMI streaming telemetry with embedded Grafana dashboards (Lab 4 ✓), SRv6 uSID transport + per-flow ECMP (Lab 5 ✓), super spines / multi-pod scale (Lab 6 ✓ conceptual), failure injection during AllReduce (Lab 7), incast + ECN demos ← **you are here**
 - **Phase 5** — polished demo scenarios + 9 blog posts
 
 The UI was promoted to Phase 2 so every subsequent feature (overlay, collectives, telemetry) can be demoed visually rather than only through `make shell-*`. See [ADR-009](notes/decisions.md).

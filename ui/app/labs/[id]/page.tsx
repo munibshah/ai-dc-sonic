@@ -1,126 +1,119 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Device, Lab, fetchDevices, fetchLab } from "@/lib/api";
+import Link from "next/link";
+import { fetchLab, type Lab } from "@/lib/api";
+import { holderStatus } from "@/lib/booking";
 import GuidePane from "@/components/GuidePane";
-import TabbedTerminals, { TabbedTerminalsHandle } from "@/components/TabbedTerminals";
-import TopologyOverlay from "@/components/TopologyOverlay";
+import { ArrowLeft, ArrowRight, Check, Clock } from "@/components/icons";
 
-export default function LabWorkbenchPage() {
-  const params = useParams<{ id: string }>();
-  const labId = params?.id as string;
-
+// Public, read-only lab preview. Anyone can read the guide here; running it
+// (consoles, Start/Solve, checkpoints) lives behind sign-in at /portal/labs/[id].
+export default function LabPreviewPage() {
+  const { id } = useParams<{ id: string }>();
   const [lab, setLab] = useState<Lab | null>(null);
-  const [labError, setLabError] = useState<string | null>(null);
-  const [devices, setDevices] = useState<Device[] | null>(null);
-  const [topoOpen, setTopoOpen] = useState(false);
-  const terminalsRef = useRef<TabbedTerminalsHandle>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [part, setPart] = useState<"overview" | "exercise">("overview");
+  const [canLaunch, setCanLaunch] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    fetchLab(labId)
+    fetchLab(id)
       .then((l) => alive && setLab(l))
-      .catch((e) => alive && setLabError(String(e)));
+      .catch((e) => alive && setError(String(e)));
+    // Signed-in slot-holders get a Launch CTA; anonymous/non-holders get Book.
+    holderStatus()
+      .then((h) => alive && setCanLaunch(Boolean(h.you_hold)))
+      .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [labId]);
+  }, [id]);
 
-  useEffect(() => {
-    let alive = true;
-    const tick = () =>
-      fetchDevices()
-        .then((d) => alive && setDevices(d))
-        .catch(() => {});
-    tick();
-    const t = setInterval(tick, 8000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+  const cta = canLaunch
+    ? { href: `/portal/labs/${id}`, label: "Launch this lab", cls: "btn-success" }
+    : { href: "/portal/book", label: "Book a slot to run this lab", cls: "btn-primary" };
 
-  function openNodeTerminal(name: string) {
-    terminalsRef.current?.openTerminal(name);
-  }
-
-  if (labError)
+  if (error)
     return (
-      <div className="p-6 rounded border border-rose-500/40 bg-rose-500/10 text-rose-200">
-        Lab not found: {labError}
-        <div className="mt-2 text-sm">
-          <Link href="/" className="underline">← back to labs</Link>
-        </div>
+      <div className="mx-auto max-w-3xl mt-10 p-6 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-200 text-sm">
+        Couldn&apos;t load this lab: {error}
       </div>
     );
-  if (!lab) return <p className="text-white/60">Loading lab…</p>;
-
-  const upCount = devices?.filter((d) => d.running).length ?? 0;
-  const totalCount = devices?.length ?? 0;
+  if (!lab) return <p className="text-white/60 text-center mt-12">Loading…</p>;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-7.5rem)]">
-      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="text-white/60 hover:text-white text-sm">
-            ← labs
-          </Link>
-          <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/60 bg-white/5">
-            Lab {lab.id}
-          </span>
-          <h1 className="text-xl font-semibold text-white">{lab.title}</h1>
-          {devices && (
-            <span
-              className={`text-xs px-2 py-0.5 rounded ${
-                upCount === totalCount
-                  ? "bg-emerald-500/20 text-emerald-300"
-                  : "bg-amber-500/20 text-amber-300"
-              }`}
-              title="containers running"
-            >
-              {upCount}/{totalCount} up
+    <div className="mx-auto max-w-4xl">
+      <div className="mb-4 text-sm text-white/50">
+        <Link href="/" className="inline-flex items-center gap-1.5 hover:text-white/80 transition-colors">
+          <ArrowLeft className="w-3.5 h-3.5" /> All labs
+        </Link>
+      </div>
+
+      <header className="brand-hero rounded-2xl p-6 md:p-9">
+        <div className="relative">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded font-mono text-white/70 bg-white/5 border border-white/10">
+              Lab {lab.id}
             </span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setTopoOpen(true)}
-            disabled={!devices}
-            className="px-3 py-1.5 rounded border border-white/20 bg-white/5 hover:bg-white/10 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Topology
-          </button>
-        </div>
-      </div>
-
-      <div className="flex flex-col lg:flex-row gap-3 flex-1 min-h-0">
-        <section className="flex-1 min-h-0 lg:basis-0 rounded-lg border border-white/10 bg-black/30 overflow-y-auto">
-          <GuidePane labId={lab.id} part="exercise" />
-        </section>
-
-        <section className="flex-1 min-h-0 lg:basis-0 rounded-lg border border-white/10 bg-black overflow-hidden flex flex-col">
-          <TabbedTerminals
-            ref={terminalsRef}
-            onRequestPickDevice={() => devices && setTopoOpen(true)}
-            emptyMessage={
-              <span>
-                No terminals open yet. Click <strong className="text-white/70">Topology</strong> above (or the <strong className="text-white/70">+</strong> here) to pick a device.
+            {lab.duration_min && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-white/45">
+                <Clock className="w-3.5 h-3.5" /> ~{lab.duration_min} min
               </span>
-            }
-          />
-        </section>
+            )}
+          </div>
+          <h1 className="text-3xl md:text-4xl font-semibold text-white tracking-tight">{lab.title}</h1>
+          <p className="text-white/70 mt-3 max-w-2xl leading-relaxed">{lab.summary}</p>
+
+          {lab.learning_objectives && lab.learning_objectives.length > 0 && (
+            <ul className="mt-6 grid sm:grid-cols-2 gap-x-6 gap-y-2">
+              {lab.learning_objectives.map((o) => (
+                <li key={o} className="text-sm text-white/70 flex gap-2.5">
+                  <Check className="w-4 h-4 shrink-0 mt-0.5 text-[var(--accent-positive)]" />
+                  {o}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-7 flex flex-wrap gap-3">
+            {/* Plain anchor: a top-level navigation so the /portal auth check + login
+                redirect happen cleanly (not a client-side RSC fetch). */}
+            <a href={cta.href} className={`btn ${cta.cls} btn-lg`}>
+              {cta.label} <ArrowRight className="w-4 h-4" />
+            </a>
+          </div>
+        </div>
+      </header>
+
+      <div className="mt-6 flex gap-2">
+        {(["overview", "exercise"] as const).map((p) => (
+          <button
+            key={p}
+            onClick={() => setPart(p)}
+            className={`px-3 py-1.5 rounded-lg text-sm capitalize ${
+              part === p
+                ? "bg-white/15 text-white"
+                : "bg-white/5 text-white/60 hover:text-white/90"
+            }`}
+          >
+            {p === "exercise" ? "What you'll do" : "Overview"}
+          </button>
+        ))}
       </div>
 
-      {topoOpen && devices && (
-        <TopologyOverlay
-          devices={devices}
-          onPickNode={openNodeTerminal}
-          onClose={() => setTopoOpen(false)}
-        />
-      )}
+      <div className="mt-3 rounded-xl border border-white/10 bg-black/30">
+        <GuidePane labId={lab.id} part={part} readOnly />
+      </div>
+
+      <div className="my-10 rounded-2xl border border-white/10 bg-black/20 p-8 text-center">
+        <p className="text-white/80 text-lg font-medium">Ready to get hands-on with a real fabric?</p>
+        <p className="text-white/50 text-sm mt-1">Book a slot and the fabric is yours for the window.</p>
+        <a href="/portal/book" className="btn btn-primary btn-lg mt-5">
+          Book your slot <ArrowRight className="w-4 h-4" />
+        </a>
+      </div>
     </div>
   );
 }

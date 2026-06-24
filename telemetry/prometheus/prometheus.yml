@@ -1,0 +1,27 @@
+# Prometheus config for the AIDC telemetry stack.
+#
+# Two scrape jobs:
+#   - gnmic       — :9804, OpenConfig interface counters + control-plane state
+#   - orchestrator — :8000/metrics/netdev, per-veth tx/rx counters polled from
+#                   each switch via docker exec on the host docker.sock. This
+#                   exists because sonic-vs's OpenConfig surface does not
+#                   bridge the clab veths (eth1..eth4) to the synthetic
+#                   SONiC ports — without it, dashboards would be all zero
+#                   even with a working AllReduce. See notes/decisions.md.
+#
+# 5s scrape interval keeps Grafana refresh feel live; 15m retention since
+# this is a short-lived lab playground, not historical analysis.
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gnmic
+    static_configs:
+      - targets: ["gnmic:9804"]
+
+  - job_name: orchestrator-netdev
+    metrics_path: /metrics/netdev
+    static_configs:
+      - targets: ["orchestrator:8000"]

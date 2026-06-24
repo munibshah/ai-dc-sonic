@@ -22,12 +22,99 @@
 
 set -e
 
-# 1. Bring up fabric veths.
+# 1. Bring up fabric veths. Also turn on per-link IPv6 seg6 acceptance so the
+#    switch can receive SRv6 (Lab 5); harmless no-op for the IPv4-only labs.
 for i in 1 2 3 4; do
   ip link set "eth${i}" up 2>/dev/null || true
+  sysctl -w "net.ipv6.conf.eth${i}.seg6_enabled=1" >/dev/null 2>&1 || true
 done
 
-# 2. (Re)start FRR daemons.
+# 1b. Per-flow ECMP for VXLAN underlay. Linux default
+#     `net.ipv4.fib_multipath_hash_policy=0` hashes only outer src/dst IP, so
+#     all 56 Gloo flows between leafA and leafB ride the SAME spine — visible
+#     in Lab 4's telemetry dashboard as ECMP skew (e.g. leaf1+leaf2 inbound
+#     all on spine1, leaf3+leaf4 inbound all on spine2). Policy=1 includes
+#     L4 (UDP src port), and Linux VXLAN derives outer UDP src from the
+#     INNER flow hash — so each inner TCP flow gets a distinct outer src
+#     port and the kernel can ECMP per-flow. Real AI DCs always set this;
+#     it's the difference between a fabric that load-spreads and one that
+#     looks like it works in basic tests but pins per-pair.
+sysctl -w net.ipv4.fib_multipath_hash_policy=1 >/dev/null 2>&1 || true
+
+# 1c. SRv6 dual-stack (Lab 5). Enable IPv6 forwarding + seg6 processing so the
+#     switch can transit AND terminate SRv6 uSID traffic, and turn on IPv6 ECMP
+#     hashing keyed on the flow label. Linux derives the outer SRv6 packet's
+#     flow label from the inner flow (seg6_flowlabel=1), so per-flow flow-label
+#     entropy spreads uSID traffic across both spines — the IPv6 twin of the
+#     VXLAN UDP-src-port trick above.
+#     NOTE policy=0 (NOT 1): for IPv6, policy 0 = "L3 + flow label", which is
+#     what we need. Policy 1 ("L4") tries to read L4 ports, but the outer uSID
+#     packet is IPv6-in-IPv6 (next-header 41) with no L4 ports, so it falls back
+#     to a constant hash and pins every flow to one spine (verified empirically).
+#     All harmless no-ops for the IPv4-only Labs 1-4 (no IPv6 routes to forward).
+sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.all.seg6_enabled=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.default.seg6_enabled=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.fib_multipath_hash_policy=0 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.seg6_flowlabel=1 >/dev/null 2>&1 || true
+
+# 2. Overlay teardown (always runs). Removes any prior Lab 2 / Lab 3 SONiC
+#    overlay state so the next step starts from a clean slate. `|| true`
+#    makes each line a no-op when the resource doesn't exist.
+#    Note: `config interface ip remove Vlan1000 <ip>` is BROKEN in this image
+#    (aidc/sonic-vs:202511) — it runs a BGP-impact check that crashes with
+#    "Unable to get summary from bgp []", so the IP is never removed and
+#    `config vlan del 1000` then refuses ("First remove IP addresses"), leaving
+#    Vlan1000 to leak into the next lab / next learner. We delete the
+#    VLAN_INTERFACE / VLAN_MEMBER rows from CONFIG_DB directly (redis db 4)
+#    instead; intfmgrd/vlanmgrd reconcile the kernel. Future labs that introduce
+#    new SONiC constructs should extend this teardown.
+#
+#    Lab 3 additionally adds eth3/eth4 to the kernel bridge `Bridge` (so
+#    the worker veths become VLAN 1000 access ports). Detach them here
+#    before VLAN/bridge teardown so a Lab 3 → Lab 1/2 switch leaves them
+#    cleanly L3-capable again.
+for IFACE in eth3 eth4; do
+  ip link set "$IFACE" nomaster 2>/dev/null || true
+done
+
+# SRv6 (Lab 5) teardown: drop any seg6 headend/endpoint routes a prior lab run
+# installed, then remove the endpoint dummy. Routes are matched by their prefix
+# from `ip -6 route show`; deleting srv6end also drops the seg6local route bound
+# to it. No-op for labs that never set up SRv6.
+for P in $(ip -6 route show 2>/dev/null | awk '/encap seg6/ {print $1}'); do
+  ip -6 route del "$P" 2>/dev/null || true
+done
+ip link del srv6end 2>/dev/null || true
+
+config vxlan map del vtep 1000 10100 2>/dev/null || true
+config vxlan evpn_nvo del nvo1 2>/dev/null || true
+config vxlan del vtep 2>/dev/null || true
+# Drop Vlan1000's members + L3 addresses straight from CONFIG_DB (the SONiC
+# `config interface ip remove` CLI is broken here — see note above), then delete
+# the VLAN. `config vlan del` may print a FileNotFoundError for a cosmetic
+# post-step that execs `docker` (absent in-container) AFTER the VLAN is already
+# removed — harmless. `ip link del` is a final kernel-side backstop.
+for k in $(redis-cli -n 4 keys 'VLAN_MEMBER|Vlan1000|*' 2>/dev/null); do
+  redis-cli -n 4 del "$k" >/dev/null 2>&1 || true
+done
+for k in $(redis-cli -n 4 keys 'VLAN_INTERFACE|Vlan1000|*' 2>/dev/null); do
+  redis-cli -n 4 del "$k" >/dev/null 2>&1 || true
+done
+redis-cli -n 4 del 'VLAN_INTERFACE|Vlan1000' >/dev/null 2>&1 || true
+sleep 1
+config vlan del 1000 2>/dev/null || true
+ip link del Vlan1000 2>/dev/null || true
+
+# 3. Overlay setup (Lab 2+). If /etc/frr/overlay-setup.sh is non-empty, run
+#    it to create the SONiC VLAN + VXLAN + EVPN NVO this switch needs before
+#    FRR comes up — `advertise-all-vni` in frr.conf discovers the resulting
+#    kernel devs at boot. Empty file = underlay-only lab state.
+if [ -s /etc/frr/overlay-setup.sh ]; then
+  sh /etc/frr/overlay-setup.sh
+fi
+
+# 4. (Re)start FRR daemons.
 supervisorctl stop bgpd zebra staticd 2>/dev/null || true
 sleep 1
 supervisorctl start zebra
@@ -36,7 +123,7 @@ supervisorctl start staticd
 supervisorctl start bgpd
 sleep 1
 
-# 3. Push our unified config into the daemons via vtysh.
+# 5. Push our unified config into the daemons via vtysh.
 #    "-b" = boot: reads /etc/frr/frr.conf and applies it through vtysh,
 #    which fans the commands out to zebra (interface IPs), bgpd (BGP), etc.
 vtysh -b

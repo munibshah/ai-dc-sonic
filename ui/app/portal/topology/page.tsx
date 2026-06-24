@@ -44,7 +44,7 @@ export default function TopologyPage() {
   const upCount = devices.filter((d) => d.running).length;
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-7xl space-y-4">
       <header className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Topology</h1>
@@ -58,10 +58,10 @@ export default function TopologyPage() {
       </header>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_18rem] gap-3">
-        <div className="rounded-lg border border-white/10 bg-black/40 p-2 overflow-hidden">
+        <div className="rounded-lg border border-white/10 bg-[#0b1020] p-2 overflow-hidden">
           <TopologyDiagram
             devices={devices}
-            onNodeClick={(name) => router.push(`/console/${name}`)}
+            onNodeClick={(name) => router.push(`/portal/console/${name}`)}
             onHoverDevice={setHoveredDev}
             onHoverLink={setHoveredLink}
           />
@@ -160,13 +160,13 @@ function LinkDetails({ link }: { link: LinkData }) {
 
         <div className="flex gap-2 mt-2">
           <Link
-            href={`/console/${link.a}`}
+            href={`/portal/console/${link.a}`}
             className="text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 border border-white/20"
           >
             {link.a} console →
           </Link>
           <Link
-            href={`/console/${link.b}`}
+            href={`/portal/console/${link.b}`}
             className="text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 border border-white/20"
           >
             {link.b} console →
@@ -217,7 +217,7 @@ function DeviceDetails({ device }: { device: Device | null }) {
           </dl>
 
           <Link
-            href={`/console/${device.name}`}
+            href={`/portal/console/${device.name}`}
             className="inline-block mt-2 text-xs px-3 py-1.5 rounded bg-white/10 hover:bg-white/20 border border-white/20"
           >
             Open console →

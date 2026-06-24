@@ -5,6 +5,8 @@
     "summary": "Configure a 2-spine / 4-leaf CLOS fabric from scratch via the in-browser console. Learn shared-AS spines, per-leaf ASNs, ECMP with multipath-relax, peer-groups, fast BGP timers — and why each choice matters for AI workloads.",
     "status": "active",
     "duration_min": 45,
+    "checkpoint_count": 6,
+    "next_lab_id": "2",
     "exercise_path": "docs/lab-guide/01-exercise.md",
     "solution_path": "docs/lab-guide/02-solution.md",
     "overview_path": "docs/lab-guide/00-overview.md",
@@ -18,23 +20,118 @@
   },
   {
     "id": "2",
-    "title": "Inject a Link Failure",
-    "summary": "Take down a fabric link, watch BGP reconverge under fast timers, observe ECMP shrink from 2 to 1 path, and trace how training-job traffic stays alive across the failure.",
-    "status": "coming-soon",
-    "duration_min": 20
+    "title": "Build the EVPN-VXLAN Overlay",
+    "summary": "Stretch a single L2 segment (VNI 10100, subnet 192.168.100.0/24) across all four leaves on top of the working underlay. Bring up Linux bridge + VXLAN devices, activate the BGP L2VPN-EVPN address family, watch Type-2 MAC routes traverse the fabric, and confirm overlay traffic actually flows leaf-to-leaf.",
+    "status": "active",
+    "duration_min": 45,
+    "checkpoint_count": 6,
+    "previous_lab_id": "1",
+    "next_lab_id": "3",
+    "exercise_path": "docs/lab-guide/lab2-exercise.md",
+    "solution_path": "docs/lab-guide/lab2-solution.md",
+    "overview_path": "docs/lab-guide/lab2-overview.md",
+    "learning_objectives": [
+      "BGP L2VPN-EVPN address family + advertise-all-vni",
+      "Why spines need next-hop-unchanged in shared-AS CLOS EVPN",
+      "Pre-allocated VTEP loopbacks as the data-plane endpoint",
+      "Type-2 MAC routes vs Type-3 inclusive-multicast routes",
+      "Linux kernel VXLAN + bridge setup that FRR discovers",
+      "How an overlay rides on top of an underlay — proven by ping"
+    ]
   },
   {
     "id": "3",
-    "title": "AllReduce Traffic Patterns",
-    "summary": "Run a Gloo-backed AllReduce across all 8 workers. Visualize how the synchronous east-west burst loads the fabric, and see what happens when you increase tensor size.",
-    "status": "coming-soon",
-    "duration_min": 30
+    "title": "GPUs on the Overlay + first AllReduce",
+    "summary": "Bring the eight GPU workers onto the stretched L2 segment you built in Lab 2. Attach each leaf's worker ports as VLAN 1000 access ports, move every worker's eth1 onto 192.168.100.0/24, and run a real Gloo AllReduce — first 2-rank across two leaves, then full 8-rank across the fabric.",
+    "status": "active",
+    "duration_min": 45,
+    "checkpoint_count": 6,
+    "previous_lab_id": "2",
+    "next_lab_id": "4",
+    "exercise_path": "docs/lab-guide/lab3-exercise.md",
+    "solution_path": "docs/lab-guide/lab3-solution.md",
+    "overview_path": "docs/lab-guide/lab3-overview.md",
+    "learning_objectives": [
+      "VLAN access ports — bridging worker veths into a VXLAN-backed L2 segment",
+      "Why an AI fabric prefers one flat L2 over per-leaf /31 underlay for the GPU plane",
+      "Gloo rendezvous + ring AllReduce as the canonical CPU collective",
+      "How a single AllReduce step maps to N² TCP flows over VXLAN tunnels",
+      "Why dropping the leaf-side L3 IP on a worker port is what makes the access-port story work",
+      "Reading effective AllReduce bandwidth as a fabric-health signal"
+    ]
   },
   {
     "id": "4",
-    "title": "NCCL Collective Emulation",
-    "summary": "Simulate NCCL communication patterns (AllReduce, Broadcast, AllGather, ReduceScatter) and see how each one stresses the fabric differently. Pick a pattern, pick a topology shape, watch the flows.",
+    "title": "Telemetry & Visualization with gNMI + Grafana",
+    "summary": "Bring up a gNMI streaming-telemetry pipeline (gnmic → Prometheus → Grafana) over your working fabric. Watch real-time per-link Mbps fill in as you run AllReduces — see ECMP load-spread across both spines, see worker ports light up, build operator intuition for what a healthy AI training fabric looks like in motion.",
+    "status": "active",
+    "duration_min": 45,
+    "checkpoint_count": 6,
+    "previous_lab_id": "3",
+    "next_lab_id": "5",
+    "exercise_path": "docs/lab-guide/lab4-exercise.md",
+    "solution_path": "docs/lab-guide/lab4-solution.md",
+    "overview_path": "docs/lab-guide/lab4-overview.md",
+    "learning_objectives": [
+      "gNMI streaming telemetry vs SNMP polling — the AI-DC default",
+      "OpenConfig interface counters as the canonical wire-rate signal",
+      "Why a virtual SONiC fabric needs a kernel-netdev side channel (and what that means for real hardware)",
+      "Reading per-link Mbps to confirm AllReduce phase activity",
+      "ECMP load-spread across spines, visible as nearly-equal traffic on parallel paths",
+      "Why Linux multipath default breaks VXLAN ECMP — and the one sysctl that fixes it",
+      "Where Prometheus + Grafana fit in an AI-fabric operator stack"
+    ],
+    "grafana_dashboard_path": "/d/aidc-lab4/aidc-lab-4-fabric-traffic?orgId=1&refresh=5s&from=now-5m&to=now&kiosk=tv"
+  },
+  {
+    "id": "5",
+    "title": "SRv6 uSID Transport + ECMP",
+    "summary": "Lay a Segment Routing over IPv6 (SRv6) uSID transport across the fabric, additive alongside the IPv4 underlay and EVPN-VXLAN overlay you already built. Define micro-SID locators in FRR, program kernel End.DT6 endpoints so each leaf decapsulates, steer flows into uSID with an H.Encaps headend — then watch distinct flows spread per-flow across both spines on the IPv6 flow label, the SRv6 analog of the VXLAN ECMP you saw in Lab 4.",
+    "status": "active",
+    "duration_min": 45,
+    "checkpoint_count": 6,
+    "previous_lab_id": "4",
+    "next_lab_id": "6",
+    "exercise_path": "docs/lab-guide/lab5-exercise.md",
+    "solution_path": "docs/lab-guide/lab5-solution.md",
+    "overview_path": "docs/lab-guide/lab5-overview.md",
+    "learning_objectives": [
+      "SRv6 and the uSID (micro-segment) compressed SID format — block / node / function bits",
+      "Dual-stacking a live fabric — an IPv6 underlay + BGP added alongside the IPv4 / VXLAN you built",
+      "FRR SRv6 locators as the control-plane object (behavior usid)",
+      "Kernel End.DT6 endpoints — and why seg6local must bind to a real device, never lo",
+      "H.Encaps.Red headend — steering a flow into a single uSID with no SRH overhead",
+      "Per-flow ECMP via the IPv6 flow label — how SRv6 load-spreads collective traffic across spines",
+      "SRv6 vs VXLAN as an AI-fabric transport — what each buys you"
+    ],
+    "grafana_dashboard_path": "/d/aidc-lab4/aidc-lab-4-fabric-traffic?orgId=1&refresh=5s&from=now-5m&to=now&kiosk=tv"
+  },
+  {
+    "id": "6",
+    "title": "Super Spines — Beyond a Single-Pod CLOS",
+    "summary": "Walk the math behind multi-pod AI fabrics: when does a 2-tier CLOS run out of room, what does the third tier look like in BGP, and why do hyperscalers schedule training jobs to live inside a pod when they can? Conceptual lab — no super spines are deployed; you inspect your existing fabric to anchor each point.",
+    "status": "active",
+    "duration_min": 30,
+    "checkpoint_count": 4,
+    "previous_lab_id": "5",
+    "next_lab_id": "7",
+    "exercise_path": "docs/lab-guide/lab6-exercise.md",
+    "solution_path": "docs/lab-guide/lab6-solution.md",
+    "overview_path": "docs/lab-guide/lab6-overview.md",
+    "learning_objectives": [
+      "Switch radix → pod ceiling — why 32-port silicon caps a pod at ~1024 GPUs",
+      "When hyperscalers add a 3rd tier (super spines) — multi-pod scale, fault-domain isolation, multi-tenant separation",
+      "The shape of 3-tier BGP — shared-AS super-spine tier, eBGP loop prevention without allowas-in, per-pod-pair ECMP across the new layer",
+      "Why super spines transit underlay-only in the simple case — and what changes if you bring EVPN to that tier",
+      "What in-pod vs cross-pod traffic means for AllReduce — and why job schedulers care about pod placement"
+    ]
+  },
+  {
+    "id": "7",
+    "title": "Inject Failure During AllReduce",
+    "summary": "Kick off a long AllReduce across all 8 GPUs, then drop a spine ↔ leaf link mid-run. Watch BGP and EVPN reconverge while the collective keeps going (or doesn't). See how fabric resilience translates directly into training-job continuity.",
     "status": "coming-soon",
-    "duration_min": 45
+    "duration_min": 45,
+    "previous_lab_id": "6"
   }
 ]

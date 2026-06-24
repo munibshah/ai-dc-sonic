@@ -1,0 +1,55 @@
+# gnmic — gNMI streaming-telemetry collector for the AIDC fabric.
+#
+# Subscribes to OpenConfig interface counters on all 6 SONiC switches and
+# exposes the samples on :9804/metrics for Prometheus to scrape. Targets
+# use clab hostnames (resolved by clab's docker-embedded DNS on the
+# aidc-mgmt net) so this config survives any IP renumbering.
+#
+# Auth note: aidc/sonic-vs:202511 ships gNMI with the legacy SONiC default
+# credentials. If auth fails, exec into a switch and check
+# /etc/sonic/telemetry/ for the actual creds in your image.
+#
+# Lab 4 also runs a kernel-netdev exporter inside the orchestrator (see
+# orchestrator/api/netdev_exporter.py) so dashboards have wire-rate data
+# even when sonic-vs's gNMI surface doesn't model the clab veths.
+
+username: admin
+password: YourPaSsWoRd
+insecure: true
+log: true
+
+targets:
+  spine1:
+    address: spine1:8080
+  spine2:
+    address: spine2:8080
+  leaf1:
+    address: leaf1:8080
+  leaf2:
+    address: leaf2:8080
+  leaf3:
+    address: leaf3:8080
+  leaf4:
+    address: leaf4:8080
+
+subscriptions:
+  if-counters:
+    paths:
+      - /interfaces/interface/state/counters/in-octets
+      - /interfaces/interface/state/counters/out-octets
+      - /interfaces/interface/state/counters/in-pkts
+      - /interfaces/interface/state/counters/out-pkts
+    mode: stream
+    stream-mode: sample
+    sample-interval: 5s
+    encoding: json_ietf
+
+outputs:
+  prom:
+    type: prometheus
+    listen: ":9804"
+    path: /metrics
+    metric-prefix: aidc_
+    append-subscription-name: false
+    strings-as-labels: true
+    export-timestamps: true

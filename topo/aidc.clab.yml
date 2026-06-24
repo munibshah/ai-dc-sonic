@@ -14,10 +14,11 @@
 #     and the shared daemons file from configs/frr/daemons.
 #   - After containers are up, run `make fabric-bootstrap` to bring up the
 #     fabric veths and (re)start zebra+bgpd inside every switch.
-#   - We are deliberately bypassing SONiC's port_config.ini / syncd port layer
-#     because netreplica/docker-sonic-vs:latest doesn't reliably bridge the
-#     containerlab veths (eth1..eth4) to its synthetic Ethernet0/4/8/12 ports.
-#     See notes/decisions.md ADR-008 for the full reasoning.
+#   - We bind-mount per-switch frr.conf + run `vtysh -b` from bootstrap-switch.sh
+#     (see ADR-008 for the original rationale on the 2022 netreplica image, and
+#     ADR-011 for the 2026 upgrade to aidc/sonic-vs:202511 / FRR 10.4.1 — the
+#     bind-mount approach kept working unchanged on modern SONiC, so we didn't
+#     refactor onto the SONiC-native config_db / mgmtd path for routing).
 #
 # Underlay addressing: see notes/decisions.md
 #
@@ -34,7 +35,7 @@ mgmt:
 topology:
   kinds:
     sonic-vs:
-      image: netreplica/docker-sonic-vs:latest
+      image: aidc/sonic-vs:202511
       binds:
         - ../configs/frr/daemons:/etc/frr/daemons:ro
         - ../configs/frr/vtysh.conf:/etc/frr/vtysh.conf:ro
@@ -55,12 +56,15 @@ topology:
       mgmt-ipv4: 172.20.20.11
       binds:
         - ../configs/frr/spine1/frr.conf:/etc/frr/frr.conf
+        # Lab 2 overlay primitives; empty stub when no overlay is active.
+        - ../configs/frr/spine1/overlay-setup.sh:/etc/frr/overlay-setup.sh
     spine2:
       kind: sonic-vs
       group: spine
       mgmt-ipv4: 172.20.20.12
       binds:
         - ../configs/frr/spine2/frr.conf:/etc/frr/frr.conf
+        - ../configs/frr/spine2/overlay-setup.sh:/etc/frr/overlay-setup.sh
 
     # ---- leaves ----
     leaf1:
@@ -69,24 +73,28 @@ topology:
       mgmt-ipv4: 172.20.20.21
       binds:
         - ../configs/frr/leaf1/frr.conf:/etc/frr/frr.conf
+        - ../configs/frr/leaf1/overlay-setup.sh:/etc/frr/overlay-setup.sh
     leaf2:
       kind: sonic-vs
       group: leaf
       mgmt-ipv4: 172.20.20.22
       binds:
         - ../configs/frr/leaf2/frr.conf:/etc/frr/frr.conf
+        - ../configs/frr/leaf2/overlay-setup.sh:/etc/frr/overlay-setup.sh
     leaf3:
       kind: sonic-vs
       group: leaf
       mgmt-ipv4: 172.20.20.23
       binds:
         - ../configs/frr/leaf3/frr.conf:/etc/frr/frr.conf
+        - ../configs/frr/leaf3/overlay-setup.sh:/etc/frr/overlay-setup.sh
     leaf4:
       kind: sonic-vs
       group: leaf
       mgmt-ipv4: 172.20.20.24
       binds:
         - ../configs/frr/leaf4/frr.conf:/etc/frr/frr.conf
+        - ../configs/frr/leaf4/overlay-setup.sh:/etc/frr/overlay-setup.sh
 
     # ---- control plane (FastAPI orchestrator + Next.js UI) ----
     # These run inside containerlab so `make warm` brings up the entire stack
@@ -100,10 +108,36 @@ topology:
       ports:
         - "8000:8000"
       binds:
+        # docker.sock: needed to `docker exec -it` into other lab containers
+        # for the in-browser console (WS PTY) and for checkpoint verification.
         - /var/run/docker.sock:/var/run/docker.sock
+        # docs/: lab-guide markdown, read-only.
         - ../docs:/repo/docs:ro
+        # workers/scripts/: AllReduce + future collective scripts the
+        # orchestrator delivers onto each gpu via `docker cp`. Lab 3 uses
+        # workers/scripts/allreduce.py. Read-only.
+        - ../workers/scripts:/repo/workers/scripts:ro
+        # configs/: RW so the orchestrator can rewrite each switch's
+        # frr.conf in place when the user clicks Start (wipe) or Solve
+        # (load canonical). The switches bind-mount the same files at
+        # /etc/frr/frr.conf; in-place truncation preserves the inode they hold.
+        - ../configs:/repo/configs
+        # /data: SQLite for lab progress / sessions. Host bind so state
+        # survives `docker rm orchestrator` / `containerlab destroy`. Path is
+        # relative to this topology file (../ = repo root).
+        - ../.aidc-orchestrator-data:/data
       env:
         AIDC_REPO_ROOT: /repo
+        AIDC_DB_PATH: /data/aidc.db
+        # Booking gate. Off unless AIDC_BOOKING_ENFORCE=1 (default empty => off),
+        # so the default single-user stack is unchanged. Values are threaded in
+        # from the Makefile's CLAB_ENV (export them in your shell or pass on the
+        # make command line). See README "Booking & public access".
+        AIDC_BOOKING_ENFORCE: ${AIDC_BOOKING_ENFORCE}
+        AIDC_BOOKING_URL: ${AIDC_BOOKING_URL}
+        AIDC_BOOKING_SECRET: ${AIDC_BOOKING_SECRET}
+        AIDC_BOOKING_FAIL_OPEN: ${AIDC_BOOKING_FAIL_OPEN}
+        AIDC_AUTH_SECRET: ${AIDC_AUTH_SECRET}
     ui:
       kind: linux
       group: control
@@ -111,6 +145,53 @@ topology:
       mgmt-ipv4: 172.20.20.6
       ports:
         - "3000:3000"
+
+    # ---- telemetry stack (Lab 4: gNMI streaming + Prometheus + Grafana) ----
+    # Brought up unconditionally by `make warm` so any lab can render
+    # dashboards — Lab 4 is the first to surface them in the UI, Lab 5
+    # (failure injection) and later inherit the stack for free. Sized to
+    # ~300 MB RAM total at idle. See ADR-007 (stack choice) and the new
+    # ADR for Lab 4 implementation specifics.
+    gnmic:
+      kind: linux
+      group: telemetry
+      image: ghcr.io/openconfig/gnmic:latest
+      mgmt-ipv4: 172.20.20.31
+      binds:
+        - ../telemetry/gnmic/gnmic.yaml:/app/gnmic.yaml:ro
+      cmd: "--config /app/gnmic.yaml subscribe"
+    prometheus:
+      kind: linux
+      group: telemetry
+      image: prom/prometheus:latest
+      mgmt-ipv4: 172.20.20.32
+      ports:
+        - "9090:9090"
+      binds:
+        - ../telemetry/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      cmd: >-
+        --config.file=/etc/prometheus/prometheus.yml
+        --storage.tsdb.path=/prometheus
+        --storage.tsdb.retention.time=15m
+        --web.enable-lifecycle
+    grafana:
+      kind: linux
+      group: telemetry
+      image: grafana/grafana:latest
+      mgmt-ipv4: 172.20.20.33
+      ports:
+        - "3001:3000"
+      binds:
+        - ../telemetry/grafana/provisioning:/etc/grafana/provisioning:ro
+        - ../telemetry/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      env:
+        GF_AUTH_ANONYMOUS_ENABLED: "true"
+        GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+        GF_AUTH_DISABLE_LOGIN_FORM: "true"
+        GF_AUTH_BASIC_ENABLED: "false"
+        GF_SECURITY_ALLOW_EMBEDDING: "true"
+        GF_USERS_DEFAULT_THEME: "dark"
+        GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/var/lib/grafana/dashboards/aidc-lab4-fabric.json"
 
     # ---- gpu workers (arm64 native, real CPU collective ops) ----
     gpu1:

@@ -5,8 +5,15 @@
 #   - runtime is just `pnpm start` (next start), no on-the-fly compilation
 #
 # Browser auto-resolves the FastAPI backend via window.location.hostname:8000
-# (see ui/lib/api.ts). We deliberately DO NOT bake NEXT_PUBLIC_AIDC_API_BASE
-# so the same image works regardless of the host's IP/hostname.
+# (see ui/lib/api.ts) when these are left empty — keeps the default image
+# host-agnostic for direct-IP / LOCAL use.
+#
+# For a public single-hostname deployment behind Cloudflare (everything under
+# lab.<domain>), pass these build args so the client calls same-origin paths:
+#   --build-arg NEXT_PUBLIC_AIDC_API_BASE=https://lab.<domain>
+#   --build-arg NEXT_PUBLIC_BOOKING_API_BASE=https://lab.<domain>/booking-api
+# NEXT_PUBLIC_* must be present at BUILD time — Next.js inlines them into the
+# client bundle; setting them at runtime has no effect.
 
 FROM node:20-alpine
 
@@ -22,6 +29,16 @@ WORKDIR /app
 # Install deps first so this layer caches across source edits.
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
+
+# Public base URLs, baked into the client bundle at build time. Empty by
+# default => the app falls back to host-relative resolution (see ui/lib/api.ts,
+# ui/lib/booking.ts).
+ARG NEXT_PUBLIC_AIDC_API_BASE=""
+ARG NEXT_PUBLIC_AIDC_WS_BASE=""
+ARG NEXT_PUBLIC_BOOKING_API_BASE=""
+ENV NEXT_PUBLIC_AIDC_API_BASE=$NEXT_PUBLIC_AIDC_API_BASE \
+    NEXT_PUBLIC_AIDC_WS_BASE=$NEXT_PUBLIC_AIDC_WS_BASE \
+    NEXT_PUBLIC_BOOKING_API_BASE=$NEXT_PUBLIC_BOOKING_API_BASE
 
 # Now copy the rest of the app and build.
 COPY . .

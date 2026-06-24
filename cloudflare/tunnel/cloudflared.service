@@ -1,0 +1,28 @@
+# systemd unit for the AIDC Cloudflare Tunnel (boot-persistent).
+#
+# Install on the lab host (needs sudo):
+#   sudo cp cloudflare/tunnel/cloudflared.service /etc/systemd/system/cloudflared-aidc.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now cloudflared-aidc
+#   # stop the ad-hoc foreground/nohup instance first if one is running:
+#   pkill -f 'cloudflared.*run aidc'
+#
+# Check:  systemctl status cloudflared-aidc   |   journalctl -u cloudflared-aidc -f
+
+[Unit]
+Description=Cloudflare Tunnel (aidc)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=aidc-sonic
+ExecStart=/usr/local/bin/cloudflared --config /home/aidc-sonic/.cloudflared/config.yml --no-autoupdate tunnel run aidc
+# Restart=always (not on-failure): cloudflared can exit 0 on a graceful drain;
+# we still want it back up. This is what makes the tunnel survive every cause.
+Restart=always
+RestartSec=3
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

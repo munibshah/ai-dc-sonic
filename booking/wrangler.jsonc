@@ -1,0 +1,56 @@
+{
+  // AIDC booking backend — Cloudflare Worker + D1.
+  // Deploy:  wrangler deploy
+  // Tail:    wrangler tail
+  // The Worker is fronted by Cloudflare Access (book.<domain>), which injects
+  // Cf-Access-Authenticated-User-Email + Cf-Access-Jwt-Assertion on every request.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aidc-booking",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "observability": {
+    "enabled": true
+  },
+
+  // Keep the *.workers.dev URL enabled alongside the route. The orchestrator
+  // (on the lab host) calls GET /api/holder/current there to avoid the Access
+  // login wall on lab.<domain> — that endpoint is guarded by ORCH_SHARED_SECRET,
+  // and every user-facing endpoint still requires a valid Access JWT (absent on
+  // workers.dev => 401), so nothing is exposed.
+  "workers_dev": true,
+
+  // Served same-origin as the UI so one Cloudflare Access login covers it.
+  // The Worker runs at the edge for lab.<domain>/booking-api/*; all other paths
+  // fall through to the tunnel origin (UI + orchestrator).
+  "routes": [
+    {
+      "pattern": "lab.munibshah.com/booking-api/*",
+      "zone_name": "munibshah.com"
+    }
+  ],
+
+  // D1 database binding. Create once with:
+  //   wrangler d1 create aidc-booking
+  // then paste the returned database_id below.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aidc-booking",
+      "database_id": "81c65075-0015-4f36-90d6-88cac2e08c26"
+    }
+  ],
+
+  // Non-secret config. Secrets are set out-of-band (never committed):
+  //   wrangler secret put ORCH_SHARED_SECRET    # == orchestrator AIDC_BOOKING_SECRET
+  //   wrangler secret put AUTH_SIGNING_SECRET   # == orchestrator AIDC_AUTH_SECRET (signs session cookies)
+  //   wrangler secret put RESEND_API_KEY        # Resend transactional email
+  "vars": {
+    // Only this email may call /api/admin/* (seed slots, set next training) and
+    // is flagged is_admin by /auth/me.
+    "INSTRUCTOR_EMAIL": "muneebshahz@gmail.com",
+    // Public app origin — used to build magic-link URLs + email links.
+    "APP_BASE_URL": "https://lab.munibshah.com",
+    // Resend "From" (must be on a domain verified in Resend).
+    "FROM_EMAIL": "AIDC Labs <labs@munibshah.com>"
+  }
+}
